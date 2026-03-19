@@ -1,0 +1,23 @@
+version: "3.9"
+
+# ── CPU build (default) ────────────────────────────────────────────
+services:
+  web:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - PHARMGKB_API_KEY=${PHARMGKB_API_KEY}
+      - BIOCYC_USERNAME=${BIOCYC_USERNAME}
+      - BIOCYC_PASSWORD=${BIOCYC_PASSWORD}
+    volumes:
+      - ./proteinscope/diagrams:/app/proteinscope/diagrams
+      - ./proteinscope/output:/app/proteinscope/output
+      - ./proteinscope/.data:/app/proteinscope/.data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3

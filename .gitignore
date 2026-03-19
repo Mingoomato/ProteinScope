@@ -1,0 +1,54 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+*.so
+*.pyd
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Environment variables
+.env
+*.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project data / outputs
+proteinscope/output/
+proteinscope/reports/*.pdf
+proteinscope/structures/
+proteinscope/diagrams/
+proteinscope/data/*.db
+proteinscope/data/*.sqlite
+proteinscope/*.db
+
+# Claude memory and session files
+.claude/
+
+# Test cache
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Large model files
+*.pt
+*.bin
+*.safetensors
+
+# Logs
+*.log

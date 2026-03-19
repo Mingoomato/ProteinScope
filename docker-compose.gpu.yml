@@ -1,0 +1,36 @@
+# ── GPU / CUDA build ──────────────────────────────────────────────
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up
+#
+# Requirements:
+#   - NVIDIA driver ≥ 525 installed on the host
+#   - nvidia-container-toolkit installed
+#     (https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/)
+#
+# The GPU service overrides the CPU service, changing only:
+#   1. The base image → nvidia/cuda:12.4.1-cudnn9-runtime-ubuntu22.04
+#   2. Adds `deploy.resources` for GPU access
+#   3. Sets CUDA_VISIBLE_DEVICES=0
+# ─────────────────────────────────────────────────────────────────
+
+version: "3.9"
+
+services:
+  web:
+    build:
+      context: .
+      args:
+        BASE: nvidia/cuda:12.4.1-cudnn9-runtime-ubuntu22.04
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - PHARMGKB_API_KEY=${PHARMGKB_API_KEY}
+      - BIOCYC_USERNAME=${BIOCYC_USERNAME}
+      - BIOCYC_PASSWORD=${BIOCYC_PASSWORD}
+      - CUDA_VISIBLE_DEVICES=0
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
