@@ -77,7 +77,7 @@ def build_metabolic_pathways_from_kegg(kegg_data: dict, gene_name: str) -> list[
             reactions=[],
             upstream_proteins=[],
             downstream_proteins=[],
-            diagram_url=f"https://www.genome.jp/pathway/{clean_pid}",
+            diagram_url=f"https://www.kegg.jp/pathway/{clean_pid}",
             diagram_image_path=None,
         ))
     return pathways
@@ -160,7 +160,7 @@ def build_disease_pathways_from_reactome(
             pathway_id=clean,
             pathway_source="KEGG",
             cascade=[],
-            diagram_url=f"https://www.genome.jp/dbget-bin/www_bget?ds:{clean}",
+            diagram_url=f"https://www.kegg.jp/entry/{clean}",
             diagram_image_path=None,
         ))
 

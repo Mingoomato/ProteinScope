@@ -113,7 +113,7 @@ async def download_pathway_image(
     plain_url = f"{_BASE}/get/{clean_id}/image"
     colored_url = (
         f"https://www.kegg.jp/kegg-bin/show_pathway?"
-        f"{clean_id}/hsa:{ncbi_gene_id}%09red"
+        f"{clean_id}&multi_query=hsa:{ncbi_gene_id}%09%23ff0000"
     )
 
     Path(save_dir).mkdir(parents=True, exist_ok=True)

@@ -40,6 +40,11 @@ _REPORTS_DIR = Path(_ROOT) / "reports"
 _REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/reports", StaticFiles(directory=str(_REPORTS_DIR)), name="reports")
 
+# Serve pathway diagram images saved by diagram_fetcher (save_dir="./diagrams")
+_DIAGRAMS_DIR = Path(_ROOT) / "diagrams"
+_DIAGRAMS_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/diagrams", StaticFiles(directory=str(_DIAGRAMS_DIR)), name="diagrams")
+
 # Mount API v1 router
 from api.v1.router import router as _api_v1  # noqa: E402
 app.include_router(_api_v1, prefix="/api/v1")
@@ -183,18 +188,24 @@ async def _run_query(
         )
 
         # Replace absolute local image paths (from diagram_image_path) with
-        # web-accessible /reports/{jid}/filename URLs so <img> tags render.
+        # web-accessible URLs so <img> tags render.
         def _fix_img_src(m: "_re.Match") -> str:
             raw = m.group(1)
             # Normalise Windows backslashes
             norm = raw.replace("\\", "/")
-            # Find ".../reports/{jid}/" prefix and keep only the filename part
+            # Case 1: path under reports/{jid}/
             marker = f"/reports/{jid}/"
             idx = norm.find(marker)
             if idx != -1:
                 rel = norm[idx + len(marker):]
                 return f'src="/reports/{jid}/{rel}"'
-            return m.group(0)  # unchanged if not in our reports dir
+            # Case 2: path under diagrams/ (saved by diagram_fetcher)
+            diag_marker = "diagrams/"
+            idx2 = norm.find(diag_marker)
+            if idx2 != -1:
+                rel2 = norm[idx2 + len(diag_marker):]
+                return f'src="/diagrams/{rel2}"'
+            return m.group(0)  # unchanged
 
         report_html = _re.sub(r'src="([^"]+)"', _fix_img_src, report_html)
 
