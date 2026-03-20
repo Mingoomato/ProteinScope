@@ -1735,6 +1735,10 @@
     // Layer 3+: H-Bond Network
     if (job.hbond_network && job.hbond_network.total_hbonds > 0) {
       setTimeout(() => showHBondNetwork(job.hbond_network, job.gene_name), 200);
+      if (job.disease_association_report && job.disease_association_report.associations && job.disease_association_report.associations.length > 0)
+        setTimeout(() => showDiseaseAssociationReport(job.disease_association_report, job.gene_name), 200);
+      if (job.etp_analysis)
+        setTimeout(() => showETPAnalysis(job.etp_analysis, job.gene_name), 200);
     }
 
     // Ph4: Update Project Board sidebar
@@ -4861,6 +4865,136 @@
       </tr></thead><tbody>${bondRows}</tbody></table>` : ''}
       ${network.gemini_interpretation ? `<p class="text-xs text-[#1C1917] mt-3 leading-relaxed">${escHtml(network.gemini_interpretation)}</p>` : ''}
     </div>`);
+  }
+
+  // ── V3 Grand Consortium: Disease Association Layer ────────────────────────
+  function showDiseaseAssociationReport(report, geneName) {
+    if (!report || !report.associations || !report.associations.length) return;
+    const evidenceColors = {
+      genetic_association: 'bg-blue-50 border-blue-200',
+      somatic_mutation:    'bg-orange-50 border-orange-200',
+      drug_target:         'bg-green-50 border-green-200',
+      literature:          'bg-gray-50 border-gray-200',
+    };
+    const rows = report.associations.slice(0, 10).map(a => {
+      const rowBg = evidenceColors[a.evidence_type] || 'bg-gray-50 border-gray-200';
+      const lofGof = a.lof_gof_hint
+        ? `<span class="ml-1 px-1.5 py-0 rounded text-[9px] font-bold ${a.lof_gof_hint === 'LoF' ? 'bg-red-100 text-red-700' : 'bg-orange-100 text-orange-700'}">${a.lof_gof_hint}</span>`
+        : '';
+      const clingen = a.clingen_classification
+        ? `<span class="ml-1 px-1.5 py-0 rounded text-[9px] font-semibold bg-purple-100 text-purple-700">${escHtml(a.clingen_classification)}</span>`
+        : '';
+      const modality = a.therapeutic_modality_hint
+        ? `<span class="ml-1 px-1 py-0 rounded text-[8px] text-gray-500 border border-gray-300">${escHtml(a.therapeutic_modality_hint)}</span>`
+        : '';
+      const hpoChips = (a.hpo_terms || []).slice(0, 3).map(t =>
+        `<span class="px-1 py-0 rounded text-[8px] bg-indigo-50 text-indigo-600 border border-indigo-200">${escHtml(t.split(' ').slice(1).join(' ') || t)}</span>`
+      ).join(' ');
+      const scoreBar = `<div class="inline-block w-12 h-1.5 rounded bg-gray-200 align-middle ml-1"><div class="h-1.5 rounded bg-blue-400" style="width:${Math.round(a.score*100)}%"></div></div>`;
+      return `<tr class="border-b border-gray-100">
+        <td class="px-2 py-1.5 text-xs font-medium text-[#1C1917]">${escHtml(a.disease_name)}${lofGof}${clingen}${modality}</td>
+        <td class="px-2 py-1.5 text-xs text-gray-500">${escHtml(a.source)}</td>
+        <td class="px-2 py-1.5 text-xs text-gray-600">${a.score.toFixed(2)}${scoreBar}</td>
+        <td class="px-2 py-1.5 text-xs text-gray-500">${hpoChips}</td>
+      </tr>`;
+    }).join('');
+    const summaryHtml = report.gemini_summary
+      ? `<p class="text-xs text-[#1C1917] mt-3 leading-relaxed">${escHtml(report.gemini_summary)}</p>`
+      : '';
+    const moreBtn = report.associations.length > 10
+      ? `<p class="text-xs text-gray-400 mt-1">Showing top 10 of ${report.total_count} associations</p>` : '';
+    appendAssistantBubble(`
+    <div class="bg-[#F5F1EB] border border-[#DDD8D0] rounded-2xl p-5 mt-4">
+      <div class="flex items-center gap-2 mb-3">
+        <span class="text-[#CC785C] font-semibold text-sm">Disease Associations</span>
+        <span class="px-2 py-0.5 rounded text-[10px] font-semibold bg-blue-100 text-blue-800">Multi-DB</span>
+        <span class="text-[10px] text-gray-400">${report.total_count} associations · OpenTargets + DisGeNET + ClinGen</span>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full text-left text-xs">
+          <thead><tr class="border-b border-[#DDD8D0]">
+            <th class="px-2 py-1 text-gray-600">Disease</th>
+            <th class="px-2 py-1 text-gray-600">Source</th>
+            <th class="px-2 py-1 text-gray-600">Score</th>
+            <th class="px-2 py-1 text-gray-600">HPO Terms</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+      ${moreBtn}${summaryHtml}
+    </div>`, false);
+  }
+
+  // ── V3 Grand Consortium: ETP Mapper (Beratan-Onuchic) ────────────────────
+  function showETPAnalysis(etp, geneName) {
+    if (!etp) return;
+    // QB Score badge
+    const qb = etp.qb_score;
+    let qbBadge = '';
+    if (qb) {
+      const dotColor = qb.badge_color === 'green' ? 'bg-green-500' : qb.badge_color === 'yellow' ? 'bg-yellow-400' : 'bg-red-500';
+      qbBadge = `<span class="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-gray-100 text-gray-700">
+        <span class="inline-block w-2 h-2 rounded-full ${dotColor}"></span>
+        QB Score: ${qb.score.toFixed(2)} — ${escHtml(qb.badge_label)}
+      </span>`;
+    }
+    // pLDDT warning banner
+    const plddt_warn = etp.plddt_warning
+      ? `<div class="bg-amber-50 border border-amber-200 rounded p-2 mb-3 text-xs text-amber-800">
+          ⚠ One or more ETP pathway residues have pLDDT &lt; 70 (low AlphaFold confidence). Pathway reliability reduced.
+         </div>` : '';
+    // Residue table
+    const reliabilityBadge = r => r.reliability === 'reliable'
+      ? '<span class="text-green-600">✓</span>'
+      : r.reliability === 'unreliable'
+      ? '<span class="text-amber-500">⚠</span>'
+      : '<span class="text-red-500">✗</span>';
+    const resRows = (etp.pathway_residues || []).map(r => {
+      const hotspotBadge = r.is_redox_active_hotspot
+        ? '<span class="ml-1 px-1 py-0 rounded text-[8px] font-bold bg-yellow-100 text-yellow-700 border border-yellow-300">🔥 Redox Hotspot</span>'
+        : '';
+      return `<tr class="border-b border-gray-100">
+        <td class="px-2 py-1 text-xs font-mono">${escHtml(r.residue_name)}${r.residue_number}</td>
+        <td class="px-2 py-1 text-xs">${r.is_donor ? '⚡ Donor' : r.is_acceptor ? '⬇ Acceptor' : 'Bridge'}</td>
+        <td class="px-2 py-1 text-xs">${r.plddt != null ? r.plddt.toFixed(0) : '—'}${hotspotBadge}</td>
+        <td class="px-2 py-1 text-xs">${reliabilityBadge(r)}</td>
+      </tr>`;
+    }).join('');
+    // Redox hotspot summary
+    const hotspotSummary = etp.redox_hotspot_residues && etp.redox_hotspot_residues.length
+      ? `<div class="mt-2 p-2 bg-yellow-50 border border-yellow-200 rounded text-xs text-yellow-800">
+           🔥 <strong>Redox-Active Fragment Hotspots:</strong> ${etp.redox_hotspot_residues.map(escHtml).join(', ')} — premier targets for electron-transfer-blocking inhibitors
+         </div>` : '';
+    // Caveat (collapsible)
+    const caveatId = `etp-caveat-${geneName}`;
+    const caveat = `<details class="mt-2"><summary class="text-[10px] text-amber-600 cursor-pointer">⚠ Scientific Caveat</summary>
+      <p class="text-[10px] text-amber-700 mt-1 leading-relaxed">${escHtml(etp.mandatory_caveat)}</p>
+    </details>`;
+    appendAssistantBubble(`
+    <div class="bg-[#F5F1EB] border border-[#DDD8D0] rounded-2xl p-5 mt-4">
+      <div class="flex items-center gap-2 mb-3 flex-wrap">
+        <span class="text-[#CC785C] font-semibold text-sm">ETP Mapper</span>
+        <span class="px-2 py-0.5 rounded text-[10px] font-semibold bg-purple-100 text-purple-800">Beratan-Onuchic 1992</span>
+        ${etp.cofactor_type ? `<span class="text-[10px] text-gray-500">Cofactor: ${escHtml(etp.cofactor_type)}</span>` : ''}
+        ${qbBadge}
+      </div>
+      ${plddt_warn}
+      ${etp.pathway_residues && etp.pathway_residues.length ? `
+      <table class="w-full text-left text-xs mb-2">
+        <thead><tr class="border-b border-[#DDD8D0]">
+          <th class="px-2 py-1 text-gray-600">Residue</th>
+          <th class="px-2 py-1 text-gray-600">Role</th>
+          <th class="px-2 py-1 text-gray-600">pLDDT</th>
+          <th class="px-2 py-1 text-gray-600">OK?</th>
+        </tr></thead>
+        <tbody>${resRows}</tbody>
+      </table>
+      <p class="text-[10px] text-gray-400">Total coupling: ${etp.total_coupling.toExponential(2)}</p>
+      ` : ''}
+      ${hotspotSummary}
+      ${etp.gemini_interpretation ? `<p class="text-xs text-[#1C1917] mt-3 leading-relaxed">${escHtml(etp.gemini_interpretation)}</p>` : ''}
+      ${caveat}
+    </div>`, false);
   }
 
   function showConceptResults(results, query, indexSize) {

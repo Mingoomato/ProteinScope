@@ -1017,6 +1017,53 @@ async def fetch_all(
         except Exception:
             pass
 
+    # ── V3: Disease Association Layer (OpenTargets + DisGeNET + ClinGen + HPO) ──
+    disease_association_result = None
+    try:
+        from fetchers.opentargets import fetch_opentargets, extract_ensembl_id_from_uniprot
+        from fetchers.disgenet import fetch_disgenet
+        from fetchers.clingen import fetch_clingen
+        from fetchers.hpo import fetch_hpo_terms
+        from analyzers.disease_association_analyzer import run_disease_association_analysis
+
+        _ensembl_id = extract_ensembl_id_from_uniprot(entry)
+        _ot_data, _disgenet_data, _clingen_data, _hpo_data = await asyncio.gather(
+            fetch_opentargets(_ensembl_id or ""),
+            fetch_disgenet(gene_name),
+            fetch_clingen(gene_name),
+            fetch_hpo_terms(ncbi_gene_id or ""),
+            return_exceptions=True,
+        )
+        disease_association_result = await run_disease_association_analysis(
+            gene=gene_name,
+            ot_data=_ot_data if isinstance(_ot_data, list) else [],
+            disgenet_data=_disgenet_data if isinstance(_disgenet_data, list) else [],
+            clingen_data=_clingen_data if isinstance(_clingen_data, list) else [],
+            hpo_data=_hpo_data if isinstance(_hpo_data, list) else [],
+            step_cb=step_cb if "step_cb" in dir() else None,
+        )
+    except Exception:
+        pass
+
+    # ── V3: ETP Mapper — Beratan-Onuchic (triggers for redox cofactor proteins) ──
+    etp_result = None
+    _REDOX_KEYWORDS = {"heme", "haem", "cytochrome", "iron-sulfur", "fe-s", "fes",
+                       "flavin", "fad", "fmn", "copper", "molybdenum", "4fe-4s", "2fe-2s"}
+    _cofactors_str = " ".join(uni.extract_cofactors(entry)).lower()
+    _has_redox = any(kw in _cofactors_str for kw in _REDOX_KEYWORDS)
+    if af_url and _has_redox:
+        try:
+            from analyzers.etp_mapper import run_etp_analysis
+            etp_result = await run_etp_analysis(
+                gene=gene_name,
+                af_pdb_url=af_url,
+                cofactors=uni.extract_cofactors(entry),
+                fragment_hotspot_map=fragment_hotspot_result,
+                step_cb=step_cb if "step_cb" in dir() else None,
+            )
+        except Exception:
+            pass
+
     # ── Cross-species ──
     cross_species_entries: list[CrossSpeciesEntry] = []
     if cross_species and binding_sites:
@@ -1095,6 +1142,8 @@ async def fetch_all(
         covalent_inhibitor_design=covalent_result,
         engineering_strategy=engineering_result,
         hbond_network=hbond_result,
+        disease_association_report=disease_association_result,
+        etp_analysis=etp_result,
     )
 
     # ── AI summary (Gemini) ──
