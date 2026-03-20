@@ -119,3 +119,65 @@ class DataProvenance(BaseModel):
     Examples: "BLOSUM62 global alignment", "masked marginal likelihood",
     "Elastic Network Model (ANM)", "Western blot".
     """
+
+
+class QBConfidenceScore(BaseModel):
+    """Quantum Biology Confidence Score — 윤박사 (CALTECH), Grand Consortium V3 2026-03-20.
+
+    Formula: score = (min_pLDDT_path / 100) * cofactor_certainty * kie_evidence_flag
+
+    Uses MIN pLDDT across all ETP pathway residues (not average). A single
+    low-confidence residue makes the entire exponential decay calculation
+    unreliable because k_ET ∝ exp(-βR) is hypersensitive to distance errors.
+
+    cofactor_certainty tiers:
+      1.0 — experimentally confirmed in this protein (PDB / biochemical assay)
+      0.6 — confirmed in close homolog (>90% identity)
+      0.2 — predicted from sequence (domain annotation)
+      0.0 — no evidence
+
+    kie_evidence_flag tiers (kH/kD threshold kH/kD > 10 at 25°C):
+      1.0 — kH/kD > 10 published for this enzyme
+      0.5 — kH/kD 7–10, or > 10 in close homolog
+      0.1 — no KIE data available
+
+    Badge colours (윤박사):
+      0.0–0.3 → red   "Speculative"       (insufficient structural/experimental support)
+      0.3–0.7 → yellow "Moderate Evidence" (some data, additional validation needed)
+      0.7–1.0 → green "Strong Evidence"   (reliable structure + cofactor + KIE)
+
+    # Citation: Rodgers & Hore (2009) PNAS 106:353-360. doi:10.1073/pnas.0711968106
+    # Citation: Cha, Murray & Klinman (1989) Science 243:1325. doi:10.1126/science.243.4896.1325
+    """
+
+    min_plddt_path: float          # minimum pLDDT across all ETP pathway residues
+    cofactor_certainty: float      # 1.0 | 0.6 | 0.2 | 0.0
+    kie_evidence_flag: float       # 1.0 | 0.5 | 0.1
+    score: float                   # = (min_plddt_path/100) * cofactor_certainty * kie_evidence_flag
+    badge_color: str               # "red" | "yellow" | "green"
+    badge_label: str               # "Speculative" | "Moderate Evidence" | "Strong Evidence"
+
+    @classmethod
+    def compute(
+        cls,
+        min_plddt: float,
+        cofactor_certainty: float,
+        kie_flag: float,
+    ) -> "QBConfidenceScore":
+        """Compute score and assign badge from raw inputs."""
+        score = (min_plddt / 100.0) * cofactor_certainty * kie_flag
+        score = round(min(max(score, 0.0), 1.0), 3)
+        if score >= 0.7:
+            color, label = "green", "Strong Evidence"
+        elif score >= 0.3:
+            color, label = "yellow", "Moderate Evidence"
+        else:
+            color, label = "red", "Speculative"
+        return cls(
+            min_plddt_path=min_plddt,
+            cofactor_certainty=cofactor_certainty,
+            kie_evidence_flag=kie_flag,
+            score=score,
+            badge_color=color,
+            badge_label=label,
+        )

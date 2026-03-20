@@ -58,6 +58,10 @@ class ConformationalAnalysis(BaseModel):
     prody_available: bool = False
     gemini_interpretation: str = ""
     allosteric_notes: str = ""
+    # V3 Grand Consortium: ANM promoting vibration overlap (용박사, SNU/KAIST)
+    promoting_vibration_modes: List[tuple] = Field(default_factory=list)
+    # [(mode_index, overlap_score)] where overlap_score >= 0.5
+    donor_acceptor_distance: Optional[float] = None
     provenance: Optional[DataProvenance] = None
 
 
@@ -192,6 +196,83 @@ async def _interpret_conformational(
 
     except Exception:
         return "", "", []
+
+
+# ---------------------------------------------------------------------------
+# ANM Promoting Vibration Overlap (용박사, Grand Consortium V3 2026-03-20)
+# ---------------------------------------------------------------------------
+
+def calc_promoting_vibration_overlap(
+    mode_vectors: list,        # list of np.ndarray, each shape (3*N,), one per mode
+    ca_positions: list,        # list of (x, y, z) tuples per residue (Cα only, 0-based)
+    donor_index: int,          # 0-based residue index of donor atom
+    acceptor_index: int,       # 0-based residue index of acceptor atom
+    threshold: float = 0.5,    # minimum overlap to include (용박사: O_k >= 0.5)
+) -> list[tuple[int, float]]:
+    """Compute ANM mode overlap with donor-acceptor compression vector.
+
+    Formula (용박사, SNU/KAIST; Grand Consortium V3):
+      e_DA = (R_A - R_D) / |R_A - R_D|           unit vector from donor to acceptor
+      Δu_DA^k = u_A^k - u_D^k                    relative displacement in mode k
+      O_k = |Δu_DA^k · e_DA| / |Δu_DA^k|         cosine overlap with DA axis
+
+    Threshold: O_k >= 0.5 = plausible promoting mode (용박사 consensus)
+    O_k >= 0.7 = strong candidate
+
+    # Citation: Hay & Scrutton (2012) Nat Chem 4:161-168. doi:10.1038/nchem.1223
+    # Citation: Hammes-Schiffer (2006) Acc Chem Res 39:93. doi:10.1021/ar040199a
+
+    Args:
+        mode_vectors: List of 3N-dimensional displacement vectors from ProDy ANM.
+        ca_positions: List of (x,y,z) Cα coordinates (0-based, same order as ANM).
+        donor_index: 0-based index of donor residue in ca_positions.
+        acceptor_index: 0-based index of acceptor residue in ca_positions.
+        threshold: Minimum overlap score to include in output.
+
+    Returns:
+        List of (mode_index_1based, overlap_score) sorted by overlap descending.
+        Only modes with O_k >= threshold are returned.
+    """
+    try:
+        import numpy as np
+    except ImportError:
+        return []
+
+    if donor_index >= len(ca_positions) or acceptor_index >= len(ca_positions):
+        return []
+    if donor_index == acceptor_index:
+        return []
+
+    # Donor-acceptor unit vector
+    r_d = np.array(ca_positions[donor_index], dtype=float)
+    r_a = np.array(ca_positions[acceptor_index], dtype=float)
+    da_vec = r_a - r_d
+    da_norm = np.linalg.norm(da_vec)
+    if da_norm < 1e-6:
+        return []
+    e_da = da_vec / da_norm
+
+    results = []
+    for k, mode_vec in enumerate(mode_vectors):
+        try:
+            vec = np.array(mode_vec, dtype=float)
+            if len(vec) < (max(donor_index, acceptor_index) + 1) * 3:
+                continue
+            # Extract 3D displacement for donor and acceptor
+            u_d = vec[donor_index * 3: donor_index * 3 + 3]
+            u_a = vec[acceptor_index * 3: acceptor_index * 3 + 3]
+            delta_u = u_a - u_d
+            delta_norm = np.linalg.norm(delta_u)
+            if delta_norm < 1e-10:
+                continue
+            overlap = abs(np.dot(delta_u, e_da)) / delta_norm
+            if overlap >= threshold:
+                results.append((k + 1, round(float(overlap), 4)))
+        except Exception:
+            continue
+
+    results.sort(key=lambda x: x[1], reverse=True)
+    return results
 
 
 # ---------------------------------------------------------------------------

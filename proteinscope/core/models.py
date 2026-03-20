@@ -167,6 +167,12 @@ class ProteinRecord(BaseModel):
     engineering_strategy: Optional["EngineeringStrategyReport"] = None
     hbond_network: Optional["HBondNetwork"] = None
 
+    # --- V3 Grand Consortium: Disease Association Layer ---
+    disease_association_report: Optional["DiseaseAssociationReport"] = None
+
+    # --- V3 Grand Consortium: ETP Mapper (Beratan-Onuchic) ---
+    etp_analysis: Optional["ETPAnalysis"] = None
+
 
 # ── Drug & Pharmacogenomics ──────────────────────────────────────────────────
 
@@ -244,6 +250,41 @@ class ProteinInteraction(BaseModel):
     interaction_type: str           # "physical", "functional", "co-expression"
     confidence_score: float         # STRING score 0.0 - 1.0
     experimentally_confirmed: bool = False
+
+
+# ── Disease Association Layer (V3 Grand Consortium) ──────────────────────────
+
+class DiseaseAssociation(BaseModel):
+    """Single gene-disease association from multi-DB integration.
+
+    Sources: OpenTargets (GraphQL) + DisGeNET (REST) + ClinGen (REST) + HPO (REST)
+    Dedup strategy: canonical_id uses EFO > MONDO > UMLS prefix priority.
+    # Citation: 김박사 (Codex GPT-5.4) + 노박사 (Gemini 2.5 Pro), Grand Consortium V3 2026-03-20
+    """
+    disease_id: str                              # canonical ID (EFO > MONDO > UMLS)
+    disease_name: str
+    canonical_mondo_id: Optional[str] = None
+    source_ids: List[str] = Field(default_factory=list)  # all IDs across sources
+    score: float                                 # 0-1, OpenTargets overall score
+    source: str                                  # "OpenTargets" | "DisGeNET" | "ClinGen"
+    evidence_count: Optional[int] = None
+    evidence_type: str = "genetic_association"   # genetic | somatic | drug_target | literature
+    # LoF/GoF from OpenTargets variantFunctionalConsequenceId (노박사):
+    # LoF: SO:0001587/0001589/0001574/0001575 | GoF: SO:0001583 + context
+    lof_gof_hint: Optional[str] = None          # "LoF" | "GoF" | None
+    therapeutic_modality_hint: Optional[str] = None  # "inhibitor" | "replacement" | "gene_therapy"
+    hpo_terms: List[str] = Field(default_factory=list)
+    clingen_classification: Optional[str] = None  # "Definitive" | "Strong" | "Moderate" | "Limited"
+    mechanistic_summary: Optional[str] = None    # 노박사's template: Gene variant → mechanism → pathway → phenotype
+    provenance: Optional[DataProvenance] = None
+
+
+class DiseaseAssociationReport(BaseModel):
+    gene: str
+    associations: List[DiseaseAssociation] = Field(default_factory=list)
+    total_count: int = 0
+    gemini_summary: str = ""
+    timestamp: Optional[str] = None
 
 
 # ── Disease / Pathology ───────────────────────────────────────────────────────
@@ -473,6 +514,12 @@ except Exception:
 # ── Layer 3+: H-Bond Network Analyzer ────────────────────────────────────────
 try:
     from analyzers.hbond_network_analyzer import HBond, HBondCluster, HBondNetwork  # noqa: F401
+except Exception:
+    pass
+
+# ── V3: ETP Mapper (Beratan-Onuchic) ─────────────────────────────────────────
+try:
+    from analyzers.etp_mapper import ETPResidue, ETPEdge, ETPAnalysis  # noqa: F401
 except Exception:
     pass
 
