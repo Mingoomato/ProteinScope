@@ -240,14 +240,13 @@ async def _gemini_synthesis(
     )
 
     try:
-        import google.generativeai as genai
+        from google import genai
 
         api_key = os.environ.get("GEMINI_API_KEY", "")
         if not api_key:
             return ""
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("models/gemini-2.5-pro")
-        response = model.generate_content(prompt)
+        client = genai.Client(api_key=api_key)
+        response = client.models.generate_content(model="models/gemini-2.5-pro", contents=prompt)
         return (response.text or "").strip()
     except Exception:
         return ""

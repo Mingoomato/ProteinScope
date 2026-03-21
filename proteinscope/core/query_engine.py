@@ -112,6 +112,16 @@ class SpeciesFallbackError(Exception):
         )
 
 
+class TargetDiscoveryRequest(Exception):
+    """Raised when a query is a Research Orientation Query (ROQ): disease/pathogen known,
+    protein target unknown. Intercepts before TaxonAmbiguityError so irrelevant species
+    cards are never shown for disease-context queries.
+    """
+    def __init__(self, query: str):
+        self.query = query
+        super().__init__(f"Research Orientation Query: '{query[:80]}'")
+
+
 from fetchers.ncbi_gene import fetch_cds_for_gene
 from fetchers.ncbi_clinvar import fetch_all_clinvar_entries
 from fetchers.omim import fetch_omim_diseases
@@ -199,7 +209,40 @@ async def _resolve_accession(query: str, organism: Optional[str], session_contex
 
         english_query = await translate_to_english(query)
 
-        # --- Step 0: Top-level intent classification ---
+        # --- Step 0a: Research Orientation Query (ROQ) early check ---
+        # MUST run BEFORE classify_query_intent() because ROQ queries (e.g.
+        # "develop antifungal ointment for Malassezia folliculitis") mention no
+        # specific protein — classify_query_intent() would wrongly flag them as
+        # off_topic before the keyword-based ROQ check further down can run.
+        _ROQ_TRIGGER_KEYWORDS_EARLY = {
+            "ointment", "cream", "drug", "treatment", "develop", "therapy",
+            "therapeutic", "antibiotic", "antifungal", "antiviral", "inhibitor",
+            "연고", "치료", "개발", "타겟", "약물", "항균", "항진균",
+        }
+        _ROQ_DISEASE_KEYWORDS_EARLY = {
+            "disease", "infection", "cancer", "tumor", "syndrome", "disorder",
+            "folliculitis", "acne", "dermatitis", "질환", "감염", "여드름",
+            "피부염", "carcinoma", "bacteria", "fungal", "fungus", "pathogen",
+            "곰팡이", "세균", "바이러스", "mycosis", "tinea",
+        }
+        _eq_lower_early = english_query.lower()
+        _orig_lower_early = query.lower()
+        _has_trigger_early = any(
+            kw in _eq_lower_early or kw in _orig_lower_early
+            for kw in _ROQ_TRIGGER_KEYWORDS_EARLY
+        )
+        _has_disease_early = any(
+            kw in _eq_lower_early or kw in _orig_lower_early
+            for kw in _ROQ_DISEASE_KEYWORDS_EARLY
+        )
+        if _has_trigger_early and _has_disease_early:
+            # Defer gene-name check: if Gemini later finds a specific gene in
+            # parse_nl_protein_query(), the later ROQ block will NOT fire
+            # (because _no_specific_gene will be False). Raising here is safe
+            # because the analyzer itself gracefully handles edge cases.
+            raise TargetDiscoveryRequest(query)
+
+        # --- Step 0b: Top-level intent classification ---
         # Runs before anything else so that off-topic / vague meta-commands
         # (e.g. "Make a report suggesting why this is impossible.") are caught
         # immediately rather than producing nonsensical protein suggestions.
@@ -301,6 +344,29 @@ async def _resolve_accession(query: str, organism: Optional[str], session_contex
 
         extracted_organism = organism or gemini_organism  # user-supplied always wins
 
+        # --- Research Orientation Query (ROQ) check ---
+        # Fires BEFORE TaxonAmbiguityError so that disease-context queries
+        # (e.g. "develop antifungal for Malassezia folliculitis") route to Target
+        # Discovery mode instead of showing irrelevant species selection cards.
+        _ROQ_TRIGGER_KEYWORDS = {
+            "ointment", "cream", "drug", "treatment", "develop", "therapy",
+            "therapeutic", "antibiotic", "antifungal", "antiviral", "inhibitor",
+            "연고", "치료", "개발", "타겟", "약물", "항균", "항진균",
+        }
+        _ROQ_DISEASE_KEYWORDS = {
+            "disease", "infection", "cancer", "tumor", "syndrome", "disorder",
+            "folliculitis", "acne", "dermatitis", "질환", "감염", "여드름",
+            "피부염", "carcinoma", "bacteria", "fungal", "fungus", "pathogen",
+        }
+        _english_lower = english_query.lower()
+        _original_lower = query.lower()
+        _has_trigger = any(kw in _english_lower or kw in _original_lower for kw in _ROQ_TRIGGER_KEYWORDS)
+        _has_disease = any(kw in _english_lower or kw in _original_lower for kw in _ROQ_DISEASE_KEYWORDS)
+        # Only fire ROQ if there is no specific gene/protein name in the parsed query
+        _no_specific_gene = not (parsed.get("gene") or "").strip()
+        if _has_trigger and _has_disease and _no_specific_gene:
+            raise TargetDiscoveryRequest(query)
+
         # --- Taxon ambiguity check (only when user hasn't specified a precise species) ---
         if extracted_organism and not organism:
             try:
@@ -374,7 +440,7 @@ async def _resolve_accession(query: str, organism: Optional[str], session_contex
 
     except (ProteinSuggestionsError, ProteinCompatibilityRequest, PathwayAnalysisRequest,
             TaxonAmbiguityError, SpeciesFallbackError, OffTopicQueryError,
-            ReverseGeneticsRequest, RNAiRequest):
+            ReverseGeneticsRequest, RNAiRequest, TargetDiscoveryRequest):
         raise
     except Exception:
         pass

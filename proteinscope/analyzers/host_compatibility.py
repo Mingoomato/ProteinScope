@@ -108,8 +108,11 @@ def _compute_cai(cds: str, table: dict[str, float]) -> float:
 
 
 def _count_feature_type(features: list[dict], feature_type: str) -> int:
-    """Count UniProt features of a given featureType."""
-    return sum(1 for f in features if f.get("featureType") == feature_type)
+    """Count UniProt features of a given type.
+
+    UniProt REST API v2 uses 'type' as the feature key (not 'featureType').
+    """
+    return sum(1 for f in features if f.get("type") == feature_type)
 
 
 def _has_feature_type(features: list[dict], feature_type: str) -> bool:

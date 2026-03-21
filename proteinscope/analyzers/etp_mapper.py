@@ -343,14 +343,13 @@ async def _gemini_etp_summary(
     )
 
     try:
-        import google.generativeai as genai
+        from google import genai
 
         api_key = os.environ.get("GEMINI_API_KEY", "")
         if not api_key:
             return ""
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("models/gemini-2.5-pro")
-        resp = model.generate_content(prompt)
+        client = genai.Client(api_key=api_key)
+        resp = client.models.generate_content(model="models/gemini-2.5-pro", contents=prompt)
         return (resp.text or "").strip()
     except Exception:
         return ""

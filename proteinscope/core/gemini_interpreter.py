@@ -12,57 +12,61 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from pathlib import Path
 from typing import Optional
 
 from dotenv import load_dotenv
 
-load_dotenv()
+# Load .env from proteinscope/ directory (parent of core/)
+load_dotenv(Path(__file__).parent.parent / ".env", override=True)
 
 log = logging.getLogger(__name__)
 
-_KEY = os.getenv("GEMINI_API_KEY", "")
+# Model name (google.genai SDK)
+_MODEL_NAME = "models/gemini-2.5-pro"
+_client = None
+_client_key: str = ""
 
-# Fallback chain — only models confirmed available for this API key
-_MODEL_NAMES = ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash"]
-_model = None
 
-
-def _get_model():
-    """Lazy-initialize Gemini 2.5 Pro (falls back to 1.5 Pro if unavailable)."""
-    global _model
-    if _model is not None:
-        return _model
-    if not _KEY:
+def _get_client():
+    """Lazy-initialize google.genai Client; re-initializes if key changes."""
+    global _client, _client_key
+    key = os.getenv("GEMINI_API_KEY", "")
+    if not key:
         return None
+    if _client is not None and key == _client_key:
+        return _client
+    _client = None
+    _client_key = key
     try:
-        import google.generativeai as genai
-        genai.configure(api_key=_KEY)
-        for name in _MODEL_NAMES:
-            try:
-                _model = genai.GenerativeModel(name)
-                log.debug("Gemini model initialised: %s", name)
-                return _model
-            except Exception as exc:
-                log.debug("Model %s unavailable: %s", name, exc)
+        from google import genai
+        _client = genai.Client(api_key=key)
+        log.debug("google.genai Client initialized")
+        return _client
     except Exception as exc:
-        log.warning("google-generativeai import failed: %s", exc)
+        log.warning("google.genai init failed: %s", exc)
     return None
 
 
 async def _call(prompt: str, timeout: float = 120.0) -> str:
     """Run Gemini 2.5 Pro with a timeout. Returns '' on failure."""
-    model = _get_model()
-    if model is None:
+    client = _get_client()
+    if client is None:
         return ""
     try:
         loop = asyncio.get_event_loop()
         response = await asyncio.wait_for(
-            loop.run_in_executor(None, lambda: model.generate_content(prompt)),
+            loop.run_in_executor(
+                None,
+                lambda: client.models.generate_content(
+                    model=_MODEL_NAME, contents=prompt
+                ),
+            ),
             timeout=timeout,
         )
-        return response.text.strip()
+        return (response.text or "").strip()
     except asyncio.TimeoutError:
-        log.warning("Gemini 2.5 Pro timed out after %.0fs", timeout)
+        log.warning("Gemini timed out after %.0fs", timeout)
         return ""
     except Exception as exc:
         log.warning("Gemini call failed: %s", exc)
@@ -927,3 +931,96 @@ async def parse_antigen_discovery_query(text: str) -> dict:
         return json.loads(cleaned)
     except Exception:
         return {"tumor_type": "unknown", "modality": "CAR-T"}
+
+
+async def parse_target_discovery_query(text: str) -> dict:
+    """Extract organism, disease name, and therapeutic modality from a Research Orientation Query.
+
+    Args:
+        text: Free-text research query mentioning a disease/pathogen (e.g. "말라세지아 모낭염 연고 개발")
+
+    Returns:
+        dict with keys: organism_scientific, organism_common, disease_name, modality_hint,
+        context_summary (2-sentence disease background)
+    """
+    import json as _json
+    try:
+        prompt = (
+            "You are a microbiologist and pharmacologist. The user is asking a research orientation "
+            "query — they know a disease or pathogen but do not know which protein to target.\n\n"
+            f"Query: {text}\n\n"
+            "Extract the following information. If the query is in Korean, still return English values.\n"
+            "Return ONLY raw JSON (no markdown, no explanation):\n"
+            '{\n'
+            '  "organism_scientific": "Malassezia globosa",\n'
+            '  "organism_common": "Malassezia (pityrosporum) yeast",\n'
+            '  "disease_name": "Malassezia folliculitis (fungal acne)",\n'
+            '  "modality_hint": "topical small molecule",\n'
+            '  "context_summary": "Two-sentence disease background for researchers."\n'
+            '}'
+        )
+        raw = await _call(prompt)
+        if not raw:
+            return {
+                "organism_scientific": "unknown",
+                "organism_common": "unknown",
+                "disease_name": "unknown",
+                "modality_hint": "small molecule",
+                "context_summary": "",
+            }
+        cleaned = raw.strip()
+        # Strip markdown code fences if present (```json ... ``` or ``` ... ```)
+        if "```" in cleaned:
+            start = cleaned.find("{")
+            end = cleaned.rfind("}") + 1
+            if start != -1 and end > start:
+                cleaned = cleaned[start:end]
+        return _json.loads(cleaned)
+    except Exception as exc:
+        log.debug("parse_target_discovery_query failed: %s", exc)
+        return {
+            "organism_scientific": "unknown",
+            "organism_common": "unknown",
+            "disease_name": "unknown",
+            "modality_hint": "small molecule",
+            "context_summary": "",
+        }
+
+
+async def synthesize_target_discovery(
+    disease_name: str,
+    organism_scientific: str,
+    candidates_json: str,
+) -> dict:
+    """Ask Gemini to synthesize top drug target candidates for a pathogen/disease.
+
+    Returns dict with keys: ranked_rationale (str), overall_strategy (str)
+    """
+    import json as _json
+    try:
+        prompt = (
+            f"You are a drug discovery expert specializing in infectious disease therapeutics.\n"
+            f"Disease: {disease_name}\n"
+            f"Pathogen: {organism_scientific}\n"
+            f"Top protein candidates (JSON):\n{candidates_json}\n\n"
+            "Provide a rigorous analysis covering:\n"
+            "1. Top 3 recommended targets with mechanistic rationale\n"
+            "2. Selectivity risks (human ortholog similarity warnings)\n"
+            "3. Known inhibitor classes for these target families\n"
+            "4. Overall therapeutic strategy (1 paragraph)\n\n"
+            "Return ONLY raw JSON:\n"
+            '{"ranked_rationale": "...", "overall_strategy": "..."}'
+        )
+        raw = await _call(prompt)
+        if not raw:
+            return {"ranked_rationale": "", "overall_strategy": ""}
+        cleaned = raw.strip()
+        if "```" in cleaned:
+            start = cleaned.find("{")
+            end = cleaned.rfind("}") + 1
+            if start != -1 and end > start:
+                cleaned = cleaned[start:end]
+        return _json.loads(cleaned)
+    except Exception as exc:
+        log.debug("synthesize_target_discovery failed: %s", exc)
+        return {"ranked_rationale": "", "overall_strategy": ""}

@@ -59,7 +59,7 @@ async def fetch_ptm_sites(gene_name: str, uniprot_entry: Optional[dict] = None) 
     if not results and uniprot_entry:
         try:
             for feat in (uniprot_entry.get("features") or []):
-                if feat.get("featureType") != "Modified residue":
+                if feat.get("type") != "Modified residue":
                     continue
                 loc = feat.get("location", {})
                 start = loc.get("start", {}).get("value", 0)

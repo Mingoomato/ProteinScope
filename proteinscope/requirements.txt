@@ -36,15 +36,14 @@ biopython>=1.83,<2.0
 pyhmmer>=0.10,<1.0
 biotite>=0.38,<1.0
 
-# PyTorch — CPU version pinned here; for CUDA replace with the appropriate
-# torch+cu* wheel from https://download.pytorch.org/whl/
-# Example CUDA 12.4:  pip install torch --index-url https://download.pytorch.org/whl/cu124
+# PyTorch — CUDA 12.8 build (auto-falls back to CPU if no CUDA GPU is present).
+# utils/device.py detects CUDA at runtime and routes all models accordingly.
+# To install: pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
 torch>=2.2,<3.0
 
 # ML / embeddings / similarity search
 sentence-transformers>=3.0,<4.0
-# faiss-cpu is the default.  On CUDA hosts replace with faiss-gpu:
-#   pip install faiss-gpu
+# faiss-cpu works on both CPU and CUDA hosts (GPU acceleration via torch).
 faiss-cpu>=1.8,<2.0
 
 # ESM-2 protein language model (required by variant_scorer.py and inverse_folder.py)

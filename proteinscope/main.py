@@ -14,7 +14,7 @@ import click
 from dotenv import load_dotenv
 
 # Load .env from project root (one level up from this file if run from within proteinscope/)
-load_dotenv(Path(__file__).parent / ".env")
+load_dotenv(Path(__file__).parent / ".env", override=True)
 
 # Ensure the package root is on the Python path
 _ROOT = str(Path(__file__).parent)

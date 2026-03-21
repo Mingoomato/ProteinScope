@@ -12,8 +12,21 @@ import json
 import os
 import sys
 import uuid
+from datetime import date, datetime
 from pathlib import Path
 from typing import AsyncGenerator
+
+
+class _DatetimeEncoder(json.JSONEncoder):
+    """JSON encoder that serializes datetime/date objects to ISO-8601 strings."""
+    def default(self, obj):
+        if isinstance(obj, (datetime, date)):
+            return obj.isoformat()
+        return super().default(obj)
+
+
+def _dumps(obj) -> str:
+    return json.dumps(obj, cls=_DatetimeEncoder)
 
 from fastapi import BackgroundTasks, FastAPI, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
@@ -85,7 +98,7 @@ async def _run_query(
     interaction_score: float,
     session_id: str = "",
 ):
-    from core.query_engine import _resolve_accession, fetch_all, ProteinSuggestionsError, TaxonAmbiguityError, SpeciesFallbackError, OffTopicQueryError, ReverseGeneticsRequest, RNAiRequest, PathwayAnalysisRequest
+    from core.query_engine import _resolve_accession, fetch_all, ProteinSuggestionsError, TaxonAmbiguityError, SpeciesFallbackError, OffTopicQueryError, ReverseGeneticsRequest, RNAiRequest, PathwayAnalysisRequest, TargetDiscoveryRequest
     from core.cache import Cache
     from output.markdown_writer import write_markdown
     from output.pdf_writer import write_pdf
@@ -146,6 +159,35 @@ async def _run_query(
                 }
                 _jobs[jid].update(payload)
                 await _push(jid, payload)
+                return
+            if exc_type_name == "TargetDiscoveryRequest":
+                # Research Orientation Query — run target discovery inline with SSE steps
+                _jobs[jid]["status"] = "target_discovery"
+                try:
+                    from analyzers.target_discovery_analyzer import run_target_discovery
+
+                    step_counter = [0]
+
+                    async def _td_step(msg: str):
+                        step_counter[0] += 1
+                        if not _jobs.get(jid, {}).get("cancelled"):
+                            await _push(jid, {"type": "step", "step": step_counter[0], "message": msg})
+
+                    td_report = await run_target_discovery(
+                        query=getattr(exc, "query", query),
+                        step_cb=_td_step,
+                    )
+                    result_payload = {
+                        "type": "target_discovery_result",
+                        "target_discovery_report": td_report.model_dump(),
+                    }
+                    _jobs[jid].update(result_payload)
+                    _jobs[jid]["status"] = "target_discovery_result"
+                    await _push(jid, result_payload)
+                except Exception as td_exc:
+                    err_payload = {"type": "error", "message": f"Target discovery failed: {td_exc}"}
+                    _jobs[jid].update(err_payload)
+                    await _push(jid, err_payload)
                 return
             raise
 
@@ -386,13 +428,13 @@ async def progress_stream(job_id: str):
     async def event_generator() -> AsyncGenerator[str, None]:
         queue = _queues.get(job_id)
         if not queue:
-            yield f"data: {json.dumps({'type': 'error', 'message': 'Job not found'})}\n\n"
+            yield f"data: {_dumps({'type': 'error', 'message': 'Job not found'})}\n\n"
             return
         while True:
             try:
                 msg = await asyncio.wait_for(queue.get(), timeout=120)
-                yield f"data: {json.dumps(msg)}\n\n"
-                if msg.get("type") in ("done", "error", "cancelled", "compatibility_redirect", "compatibility_result", "taxon_ambiguity", "suggestions", "species_fallback", "off_topic", "reverse_genetics_redirect", "rnai_redirect", "reverse_genetics_result", "rnai_result", "pathway_plan", "pathway_summary_result", "esm_result"):
+                yield f"data: {_dumps(msg)}\n\n"
+                if msg.get("type") in ("done", "error", "cancelled", "compatibility_redirect", "compatibility_result", "taxon_ambiguity", "suggestions", "species_fallback", "off_topic", "reverse_genetics_redirect", "rnai_redirect", "reverse_genetics_result", "rnai_result", "pathway_plan", "pathway_summary_result", "esm_result", "target_discovery_result"):
                     break
             except asyncio.TimeoutError:
                 yield "data: {\"type\": \"ping\"}\n\n"

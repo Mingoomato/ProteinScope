@@ -15,6 +15,8 @@
   <!-- Cytoscape.js PPI network with CoSE-Bilkent layout -->
   <script src="https://cdn.jsdelivr.net/npm/cytoscape@3.28.1/dist/cytoscape.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/cytoscape-cose-bilkent@4.1.0/cytoscape-cose-bilkent.js"></script>
+  <!-- EBI ProTVista — UniProt feature annotation viewer (Web Component) -->
+  <script type="module" src="https://cdn.jsdelivr.net/npm/protvista-uniprot/dist/protvista-uniprot.js"></script>
   <style>
     body { font-family: 'Inter', sans-serif; background: #EDE8DF; }
     code, pre, .mono { font-family: 'JetBrains Mono', monospace; }
@@ -97,6 +99,10 @@
       100% { opacity:0; max-height:0;   transform:scaleY(0.95); padding:0; margin:0; }
     }
     .pg-collapse { transform-origin:top; overflow:hidden; animation:collapseUp 0.5s cubic-bezier(0.4,0,1,1) forwards; }
+
+    /* ── Analysis log (collapsed step history) ── */
+    .pg-log-steps { overflow:hidden; transition:max-height 0.3s ease, opacity 0.2s ease; max-height:0; opacity:0; }
+    .pg-log-steps.open { max-height:600px; opacity:1; }
 
     /* ── Report card entrance (staggered) ── */
     @keyframes cardSlideIn {
@@ -301,13 +307,13 @@
     </div>
 
     <!-- Messages stream -->
-    <div id="messages" class="max-w-3xl mx-auto px-4 py-8 space-y-8 hidden"></div>
+    <div id="messages" class="max-w-5xl mx-auto px-4 py-8 space-y-8 hidden"></div>
 
   </div>
 
   <!-- ─── Bottom input ─── -->
   <div class="flex-shrink-0 bg-[#F5F2EE] px-4 py-4">
-    <form id="search-form" onsubmit="startSearch(event)" class="max-w-3xl mx-auto">
+    <form id="search-form" onsubmit="startSearch(event)" class="max-w-5xl mx-auto">
 
       <!-- Textarea box -->
       <div id="input-wrap" class="bg-[#FAF9F7] border border-[#D8D2C8] rounded-3xl shadow-sm transition-all duration-150">
@@ -818,6 +824,11 @@
     const key = `ps_conv_${currentConversationId}`;
     let msgs = [];
     try { msgs = JSON.parse(localStorage.getItem(key) || '[]'); } catch {}
+    // Deduplicate: skip if last message is identical user bubble
+    if (msg.role === 'user' && msgs.length > 0) {
+      const last = msgs[msgs.length - 1];
+      if (last.role === 'user' && last.text === msg.text) return;
+    }
     msgs.push(msg);
     // Trim from front so the most recent messages survive quota limits.
     // Typed report records ({type:'report',...}) are tiny (JSON data, not HTML)
@@ -867,11 +878,12 @@
   // _restoring=true at this point, so _saveMsg is suppressed — no duplicate saves.
   function _restoreReport(type, data) {
     if (!type || !data) return;
-    if (type === 'compatibility')     showCompatibilityReport(data);
+    if (type === 'compatibility')       showCompatibilityReport(data);
     else if (type === 'reverse_genetics') showReverseGeneticsReport(data);
-    else if (type === 'rnai')         showRNAiReport(data);
-    else if (type === 'pathway_plan') showPathwayPlanBubble(data.plan);
-    else if (type === 'protein')      _restoreProteinStub(data);
+    else if (type === 'rnai')           showRNAiReport(data);
+    else if (type === 'pathway_plan')   showPathwayPlanBubble(data.plan);
+    else if (type === 'protein')        _restoreProteinStub(data);
+    else if (type === 'target_discovery') showTargetDiscoveryReport(data);
   }
 
   function _restoreProteinStub(data) {
@@ -987,6 +999,15 @@
     ta.style.height = Math.min(ta.scrollHeight, 160) + 'px';
   }
 
+  function submitQuery(text) {
+    const ta = document.getElementById('query-input');
+    ta.value = text;
+    autoResize(ta);
+    document.getElementById('search-form').dispatchEvent(
+      new Event('submit', { cancelable: true, bubbles: true })
+    );
+  }
+
   function handleKey(e) {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -1062,7 +1083,7 @@
     const div = document.createElement('div');
     div.className = 'flex justify-end fade-up';
     div.innerHTML = `
-      <div class="max-w-xl bg-[#2C2926] text-[#F5F0EB] rounded-2xl rounded-tr-sm px-5 py-3 text-sm leading-relaxed whitespace-pre-wrap break-words shadow-sm">
+      <div class="max-w-2xl bg-[#2C2926] text-[#F5F0EB] rounded-2xl rounded-tr-sm px-5 py-3 text-sm leading-relaxed whitespace-pre-wrap break-words shadow-sm">
         ${escHtml(text)}
       </div>`;
     document.getElementById('messages').appendChild(div);
@@ -1202,16 +1223,6 @@
     if (spinner) spinner.style.animation = 'none';
     if (spinner) spinner.querySelectorAll('*').forEach(el => { el.style.animation = 'none'; });
 
-    const header = progressContentEl?.querySelector('#pg-header');
-    if (header) {
-      header.innerHTML = `
-        <div class="w-7 h-7 rounded-full bg-emerald-500 flex items-center justify-center flex-shrink-0 shadow-sm">
-          <svg class="w-3.5 h-3.5 text-white" fill="none" stroke="currentColor" stroke-width="3" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
-          </svg>
-        </div>
-        <p class="text-sm font-semibold text-emerald-700">${escHtml(message)}</p>`;
-    }
     // Stop any in-progress unfurl
     if (_unfurlTimer) { clearInterval(_unfurlTimer); _unfurlTimer = null; }
     // Mark all steps done, remove carets, stop animations
@@ -1223,18 +1234,48 @@
         el.style.animation = 'none';
       }
     });
+
+    // Count steps for the log toggle label
+    const stepCount = stepsEl ? stepsEl.children.length : 0;
+
+    const header = progressContentEl?.querySelector('#pg-header');
+    if (header) {
+      header.innerHTML = `
+        <button onclick="toggleAnalysisLog(this)" class="w-full flex items-center gap-2.5 text-left group">
+          <div class="w-7 h-7 rounded-full bg-emerald-500 flex items-center justify-center flex-shrink-0 shadow-sm">
+            <svg class="w-3.5 h-3.5 text-white" fill="none" stroke="currentColor" stroke-width="3" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+            </svg>
+          </div>
+          <p class="text-sm font-semibold text-emerald-700 flex-1">${escHtml(message)}</p>
+          <span class="text-[10px] text-[#A8A29E] group-hover:text-[#78716C] transition-colors mr-1">${stepCount} steps</span>
+          <svg class="pg-log-chevron w-3.5 h-3.5 text-[#A8A29E] group-hover:text-[#78716C] transition-all flex-shrink-0" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/>
+          </svg>
+        </button>`;
+    }
+    // Move steps into a collapsible wrapper
+    if (stepsEl) {
+      stepsEl.classList.add('pg-log-steps');
+      stepsEl.classList.remove('border-t', 'border-[#F0EDE8]', 'pt-3', 'mt-3');
+    }
+  }
+
+  function toggleAnalysisLog(btn) {
+    const card = btn.closest('#pg-card');
+    if (!card) return;
+    const stepsDiv = card.querySelector('#pg-steps');
+    if (!stepsDiv) return;
+    const isOpen = stepsDiv.classList.contains('open');
+    stepsDiv.classList.toggle('open', !isOpen);
+    const chevron = btn.querySelector('.pg-log-chevron');
+    if (chevron) chevron.style.transform = isOpen ? '' : 'rotate(180deg)';
+    if (!isOpen) stepsDiv.classList.add('border-t', 'border-[#F0EDE8]', 'pt-3', 'mt-3');
+    else stepsDiv.classList.remove('border-t', 'border-[#F0EDE8]', 'pt-3', 'mt-3');
   }
 
   function collapseProgressBubble() {
-    if (!_progressBubbleEl) return;
-    const card = _progressBubbleEl.querySelector('#pg-card');
-    if (card) {
-      card.classList.add('pg-collapse');
-      card.addEventListener('animationend', () => {
-        _progressBubbleEl?.remove();
-        _progressBubbleEl = null;
-      }, { once: true });
-    }
+    // No-op: keep the log bubble visible so user can review steps
   }
 
   // ── Search ──
@@ -1479,6 +1520,15 @@
           collapseProgressBubble();
           progressContentEl = null; stepsEl = null;
           showInverseFoldReport(_ifmsg.designs || [], _ifmsg.gene || '');
+        }, 600);
+      } else if (msg.type === 'target_discovery_result') {
+        finishProgress('Target Discovery analysis complete!');
+        es.close();
+        const _tdmsg = msg;
+        setTimeout(() => {
+          collapseProgressBubble();
+          progressContentEl = null; stepsEl = null;
+          showTargetDiscoveryReport(_tdmsg.target_discovery_report);
         }, 600);
       } else if (msg.type === 'esm_result') {
         // ESM-2 fitness result (launched from launchFitnessLandscape — handled there directly)
@@ -1735,10 +1785,33 @@
     // Layer 3+: H-Bond Network
     if (job.hbond_network && job.hbond_network.total_hbonds > 0) {
       setTimeout(() => showHBondNetwork(job.hbond_network, job.gene_name), 200);
-      if (job.disease_association_report && job.disease_association_report.associations && job.disease_association_report.associations.length > 0)
-        setTimeout(() => showDiseaseAssociationReport(job.disease_association_report, job.gene_name), 200);
-      if (job.etp_analysis)
-        setTimeout(() => showETPAnalysis(job.etp_analysis, job.gene_name), 200);
+    }
+    // Disease Association Report (was incorrectly nested inside H-Bond block — fixed)
+    if (job.disease_association_report && job.disease_association_report.associations && job.disease_association_report.associations.length > 0) {
+      setTimeout(() => showDiseaseAssociationReport(job.disease_association_report, job.gene_name), 200);
+    }
+    // ETP Analysis
+    if (job.etp_analysis) {
+      setTimeout(() => showETPAnalysis(job.etp_analysis, job.gene_name), 200);
+    }
+
+    // ── V5 UI Benchmarking Upgrades ─────────────────────────────────────────
+    // B1: ProTVista EBI Feature Viewer (domain/PTM/variant annotation track)
+    if (job.uniprot_id) {
+      setTimeout(() => showProTVistaFeatureViewer(job.uniprot_id, job.gene_name), 400);
+    }
+
+    // B3: AlphaFold pLDDT per-residue bar chart (EBI color scheme)
+    if (job.uniprot_id && job.alphafold_plddt_score != null) {
+      setTimeout(() => showAlphaFoldPLDDTChart(job.uniprot_id, job.gene_name, job.alphafold_plddt_score), 600);
+    }
+
+    // B4: STRING PPI network static image (quick overview before graph load)
+    if (job.gene_name && job.organism && (job.protein_interactions || []).length > 0) {
+      const stringSpecies = _guessNCBITaxon(job.organism);
+      if (stringSpecies) {
+        setTimeout(() => showSTRINGNetworkImage(job.gene_name, stringSpecies), 800);
+      }
     }
 
     // Ph4: Update Project Board sidebar
@@ -4581,7 +4654,7 @@
         <div><span class="text-[#78716c]">MW:</span> <strong>${report.molecular_weight_kda != null ? report.molecular_weight_kda.toFixed(1)+' kDa' : '—'}</strong></div>
         <div><span class="text-[#78716c]">NMR:</span> <strong class="${nmrClass}">${escHtml(report.nmr_suitability || '—')}</strong></div>
       </div>
-      ${fretCands.length ? `<p class="text-xs font-medium mb-1">Top FRET Cys pairs:</p><ul class="text-xs text-[#57534e] list-disc ml-4 mb-2">${fretCands.map(f=>`<li>Cys${f.cys1}–Cys${f.cys2} · est. ${f.estimated_distance_angstrom?.toFixed(0)||'?'} Å</li>`).join('')}</ul>` : ''}
+      ${fretCands.length ? `<p class="text-xs font-medium mb-1">Top FRET Cys pairs:</p><ul class="text-xs text-[#57534e] list-disc ml-4 mb-2">${fretCands.map(f=>`<li>Cys${f.residue_a}–Cys${f.residue_b} · est. ${f.distance_angstrom != null ? f.distance_angstrom.toFixed(0) : '?'} Å</li>`).join('')}</ul>` : ''}
       ${hdxEx.length ? `<p class="text-xs font-medium mb-1">Fast-exchange HDX regions:</p><ul class="text-xs text-[#57534e] list-disc ml-4">${hdxEx.map(r=>`<li>${r}</li>`).join('')}</ul>` : ''}
       ${report.gemini_interpretation ? `<p class="text-xs text-[#1C1917] mt-3 leading-relaxed">${escHtml(report.gemini_interpretation)}</p>` : ''}
     </div>`);
@@ -4630,24 +4703,47 @@
   // ── Layer 3: ADMET ────────────────────────────────────────────────────────
   function showADMETReport(report, geneName) {
     const profiles = (report.drug_profiles || []).slice(0, 8);
-    const rows = profiles.map(p => {
+    // B2: ChEMBL 2D structure images — add drug structure image if chembl_id or drug_id available
+    const cards = profiles.map(p => {
       const flag = p.overall_flag || 'green';
-      const flagColor = flag==='red'?'text-red-600':flag==='yellow'?'text-amber-600':'text-green-600';
-      return `<tr class="border-t border-[#E8E3DA]">
-        <td class="py-1 px-2 text-xs">${escHtml(p.drug_name || '')}</td>
-        <td class="py-1 px-2 text-xs text-right">${p.lipinski_violations != null ? p.lipinski_violations : '—'}</td>
-        <td class="py-1 px-2 text-xs">${p.bbb_penetrant ? 'Yes' : 'No'}</td>
-        <td class="py-1 px-2 text-xs ${flagColor} font-semibold">${escHtml(flag)}</td>
-      </tr>`;
+      const flagColor = flag==='red'?'bg-red-100 text-red-700':flag==='yellow'?'bg-amber-100 text-amber-700':'bg-green-100 text-green-700';
+      const chemblId = p.drug_id || '';
+      const structImg = chemblId && chemblId.startsWith('CHEMBL')
+        ? `<img src="https://www.ebi.ac.uk/chembl/api/data/image/${encodeURIComponent(chemblId)}.svg"
+               alt="2D structure"
+               class="w-[90px] h-[70px] object-contain rounded border border-[#E6E1D9] bg-white p-1"
+               onerror="this.style.display='none'" loading="lazy" />`
+        : `<div class="w-[90px] h-[70px] bg-[#F0EBE5] rounded border border-[#E6E1D9] flex items-center justify-center">
+             <span class="text-[9px] text-[#A8A29E]">No structure</span>
+           </div>`;
+      return `
+        <div class="flex items-start gap-3 py-2 border-b border-[#F0EBE5] last:border-0">
+          ${structImg}
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center gap-1.5 flex-wrap">
+              <span class="text-xs font-semibold text-[#1C1917]">${escHtml(p.drug_name || '')}</span>
+              ${chemblId ? `<span class="text-[9px] text-[#A8A29E] font-mono">${escHtml(chemblId)}</span>` : ''}
+              <span class="px-1.5 py-0.5 rounded text-[9px] font-semibold ${flagColor}">${flag.toUpperCase()}</span>
+            </div>
+            <div class="mt-1 flex flex-wrap gap-2 text-[10px] text-[#57534e]">
+              <span>Lipinski: <strong>${p.lipinski_violations != null ? p.lipinski_violations : '—'}</strong></span>
+              <span>BBB: <strong>${p.bbb_penetrant ? 'Penetrant' : 'No'}</strong></span>
+              ${p.herg_blocker ? '<span class="text-red-600 font-semibold">⚠ hERG</span>' : ''}
+              ${p.cyp3a4_inhibitor ? '<span class="text-amber-600">CYP3A4</span>' : ''}
+            </div>
+          </div>
+        </div>`;
     }).join('');
-    appendAssistantBubble(`<div class="bg-[#F5F1EB] border border-[#DDD8D0] rounded-2xl p-4 mt-3">
-      <h3 class="text-sm font-semibold text-[#CC785C] mb-2">ADMET Profiles · ${escHtml(geneName)}</h3>
-      <table class="w-full text-left"><thead><tr class="text-[10px] uppercase text-[#57534e]">
-        <th class="px-2 py-1">Drug</th><th class="px-2 py-1 text-right">Lipinski Violations</th>
-        <th class="px-2 py-1">BBB</th><th class="px-2 py-1">Flag</th>
-      </tr></thead><tbody>${rows}</tbody></table>
-      ${report.gemini_summary ? `<p class="text-xs text-[#1C1917] mt-3 leading-relaxed">${escHtml(report.gemini_summary)}</p>` : ''}
-    </div>`);
+    appendAssistantBubble(`
+      <div class="bg-[#F5F1EB] border border-[#DDD8D0] rounded-2xl p-4 mt-3">
+        <div class="flex items-center gap-2 mb-3">
+          <h3 class="text-sm font-semibold text-[#CC785C]">ADMET Profiles · ${escHtml(geneName)}</h3>
+          <span class="px-2 py-0.5 rounded text-[10px] font-semibold bg-green-100 text-green-800">Layer 3</span>
+        </div>
+        <div class="divide-y divide-[#F0EBE5]">${cards}</div>
+        ${report.gemini_summary ? `<p class="text-xs text-[#1C1917] mt-3 leading-relaxed">${escHtml(report.gemini_summary)}</p>` : ''}
+        <p class="text-[9px] text-[#A8A29E] mt-2">2D structures from EBI ChEMBL · ADMET predictions from pkCSM/SwissADME</p>
+      </div>`);
   }
 
   // ── Layer 3: Directed Evolution ───────────────────────────────────────────
@@ -4668,16 +4764,16 @@
 
   // ── Layer 3: PROTAC ───────────────────────────────────────────────────────
   function showPROTACFeasibility(report, geneName) {
-    const scoreColor = report.overall_score >= 0.7 ? 'text-green-700' : report.overall_score >= 0.4 ? 'text-amber-600' : 'text-red-600';
-    const e3s = (report.e3_ligase_options || []).slice(0, 4);
+    const feasColor = report.overall_feasibility === 'High' ? 'text-green-700' : report.overall_feasibility === 'Moderate' ? 'text-amber-600' : 'text-red-600';
+    const e3s = (report.e3_options || []).slice(0, 4);
     const e3rows = e3s.map(e => `<tr class="border-t border-[#E8E3DA]">
-      <td class="py-1 px-2 text-xs font-semibold">${escHtml(e.e3_ligase || '')}</td>
-      <td class="py-1 px-2 text-xs">${escHtml(e.warhead_chemistry || '')}</td>
-      <td class="py-1 px-2 text-xs text-right">${e.feasibility_score != null ? e.feasibility_score.toFixed(2) : '—'}</td>
+      <td class="py-1 px-2 text-xs font-semibold">${escHtml(e.e3_name || '')}</td>
+      <td class="py-1 px-2 text-xs">${escHtml(e.warhead || '')}</td>
+      <td class="py-1 px-2 text-xs text-right">${e.compatibility_score != null ? e.compatibility_score.toFixed(2) : '—'}</td>
     </tr>`).join('');
     appendAssistantBubble(`<div class="bg-[#F5F1EB] border border-[#DDD8D0] rounded-2xl p-4 mt-3">
       <h3 class="text-sm font-semibold text-[#CC785C] mb-1">PROTAC Feasibility · ${escHtml(geneName)}</h3>
-      <p class="text-xs mb-3">Overall score: <strong class="${scoreColor}">${report.overall_score != null ? report.overall_score.toFixed(2) : '—'}</strong> · ${escHtml(report.feasibility_tier || '')}</p>
+      <p class="text-xs mb-3">Overall score: <strong class="${feasColor}">${escHtml(report.overall_feasibility || '—')}</strong></p>
       <table class="w-full text-left"><thead><tr class="text-[10px] uppercase text-[#57534e]">
         <th class="px-2 py-1">E3 Ligase</th><th class="px-2 py-1">Warhead</th><th class="px-2 py-1 text-right">Score</th>
       </tr></thead><tbody>${e3rows}</tbody></table>
@@ -4730,14 +4826,14 @@
     const alts = (report.alternative_configs || []).slice(0, 3);
     const altRows = alts.map(a => `<tr class="border-t border-[#E8E3DA]">
       <td class="py-1 px-2 text-xs">${escHtml(a.serotype || '')}</td>
-      <td class="py-1 px-2 text-xs">${escHtml(a.tropism || '')}</td>
+      <td class="py-1 px-2 text-xs">${escHtml(a.tissue_target || '')}</td>
       <td class="py-1 px-2 text-xs">${escHtml(a.promoter || '')}</td>
     </tr>`).join('');
     appendAssistantBubble(`<div class="bg-[#F5F1EB] border border-[#DDD8D0] rounded-2xl p-4 mt-3">
       <h3 class="text-sm font-semibold text-[#CC785C] mb-2">AAV Gene Therapy Design · ${escHtml(geneName)}</h3>
       <div class="bg-white border border-[#DDD8D0] rounded-xl px-3 py-2 mb-3 text-xs">
         <p class="font-semibold mb-1">Recommended: ${escHtml(rec.serotype || '')} · ${escHtml(rec.promoter || '')}</p>
-        <p class="text-[#57534e]">${escHtml(rec.tropism || '')} · Capacity: ${rec.payload_capacity_kb != null ? rec.payload_capacity_kb+'kb' : '—'}</p>
+        <p class="text-[#57534e]">${escHtml(rec.tissue_target || '')} · Capacity: ${rec.total_payload_bp != null ? (rec.total_payload_bp/1000).toFixed(1)+' kb' : '—'} ${rec.within_capacity === false ? '<span class="text-red-600">⚠ over limit</span>' : ''}</p>
         ${report.capacity_warning ? `<p class="text-amber-600 text-[11px] mt-1">⚠ ${escHtml(report.capacity_warning)}</p>` : ''}
       </div>
       ${altRows ? `<table class="w-full text-left mb-2"><thead><tr class="text-[10px] uppercase text-[#57534e]">
@@ -4751,10 +4847,10 @@
   function showCRISPRPlan(plan, geneName) {
     const guides = (plan.top_guides || []).slice(0, 6);
     const rows = guides.map(g => `<tr class="border-t border-[#E8E3DA]">
-      <td class="py-1 px-2 font-mono text-xs">${escHtml(g.spacer || '')}</td>
+      <td class="py-1 px-2 font-mono text-xs">${escHtml(g.guide_sequence || '')}</td>
       <td class="py-1 px-2 text-xs">${escHtml(g.pam || '')}</td>
-      <td class="py-1 px-2 text-xs text-right">${g.on_target_score != null ? g.on_target_score.toFixed(3) : '—'}</td>
-      <td class="py-1 px-2 text-xs">${escHtml(g.position_note || '')}</td>
+      <td class="py-1 px-2 text-xs text-right">${g.doench_score != null ? g.doench_score.toFixed(3) : '—'}</td>
+      <td class="py-1 px-2 text-xs">${g.cut_position != null ? 'nt '+g.cut_position : ''}</td>
     </tr>`).join('');
     appendAssistantBubble(`<div class="bg-[#F5F1EB] border border-[#DDD8D0] rounded-2xl p-4 mt-3">
       <h3 class="text-sm font-semibold text-[#CC785C] mb-2">CRISPR Integration Plan · ${escHtml(geneName)}</h3>
@@ -5028,6 +5124,297 @@
         </div>
         <div class="px-6 py-4 space-y-2">${cards}</div>
       </div>`);
+  }
+
+  // =========================================================================
+  // V5 UI Benchmark Upgrades (B1–B4)
+  // =========================================================================
+
+  // Helper: guess NCBI taxon ID from organism name (common species only)
+  function _guessNCBITaxon(organism) {
+    if (!organism) return null;
+    const o = organism.toLowerCase();
+    if (o.includes('homo sapiens') || o.includes('human')) return '9606';
+    if (o.includes('mus musculus') || o.includes('mouse')) return '10090';
+    if (o.includes('rattus') || o.includes('rat')) return '10116';
+    if (o.includes('saccharomyces') || o.includes('yeast')) return '4932';
+    if (o.includes('malassezia globosa')) return '166655';
+    if (o.includes('malassezia')) return '76773';
+    if (o.includes('candida albicans')) return '5476';
+    if (o.includes('aspergillus fumigatus')) return '746128';
+    if (o.includes('escherichia coli') || o.includes('e. coli')) return '83333';
+    if (o.includes('arabidopsis')) return '3702';
+    if (o.includes('drosophila')) return '7227';
+    if (o.includes('danio rerio') || o.includes('zebrafish')) return '7955';
+    return null;
+  }
+
+  // B1: ProTVista EBI Feature Viewer
+  // Renders the official EBI UniProt feature annotation track (domains, PTMs, variants, structure).
+  function showProTVistaFeatureViewer(uniprotId, geneName) {
+    if (!uniprotId) return;
+    const html = `
+      <div class="card-in bg-[#F5F1EB] border border-[#DDD8D0] rounded-2xl p-5 mt-4 overflow-hidden">
+        <div class="flex items-center gap-2 mb-3">
+          <span class="text-[#CC785C] font-semibold text-sm">Feature Annotation Track</span>
+          <span class="px-2 py-0.5 rounded text-[10px] font-semibold bg-blue-100 text-blue-800">EBI ProTVista</span>
+          <span class="ml-auto text-[10px] text-[#A8A29E]">${escHtml(uniprotId)}</span>
+        </div>
+        <p class="text-[10px] text-[#78716c] mb-3">UniProt sequence features: domains · PTM sites · variants · structural regions · disulfide bonds</p>
+        <div class="bg-white rounded-xl p-3 border border-[#E6E1D9] overflow-x-auto min-h-[120px]">
+          <protvista-uniprot accession="${escHtml(uniprotId)}"></protvista-uniprot>
+        </div>
+        <p class="text-[9px] text-[#A8A29E] mt-2">Data from EBI/UniProt. Rendered by ProTVista Web Component (EBI). Click features for details.</p>
+      </div>`;
+    appendAssistantBubble(html, false);
+  }
+
+  // B3: AlphaFold DB per-residue pLDDT bar chart (EBI color scheme)
+  // Fetches confidenceScore array from AlphaFold DB API and renders a D3 bar chart.
+  async function showAlphaFoldPLDDTChart(uniprotId, geneName, avgPlddt) {
+    if (!uniprotId) return;
+    try {
+      const resp = await fetch(`https://alphafold.ebi.ac.uk/api/prediction/${uniprotId}`);
+      if (!resp.ok) return;
+      const data = await resp.json();
+      const entry = Array.isArray(data) ? data[0] : data;
+      const scores = entry && entry.confidenceScore ? entry.confidenceScore : null;
+      if (!scores || !scores.length) return;
+
+      // Downsample for display if sequence is very long (> 500 residues)
+      const MAX_BARS = 500;
+      let displayScores = scores;
+      let downsampled = false;
+      if (scores.length > MAX_BARS) {
+        const step = Math.ceil(scores.length / MAX_BARS);
+        displayScores = scores.filter((_, i) => i % step === 0);
+        downsampled = true;
+      }
+
+      const chartId = 'plddt-chart-' + Math.random().toString(36).slice(2,8);
+      const html = `
+        <div class="card-in bg-[#F5F1EB] border border-[#DDD8D0] rounded-2xl p-5 mt-4">
+          <div class="flex items-center gap-2 mb-3">
+            <span class="text-[#CC785C] font-semibold text-sm">Per-Residue Confidence (pLDDT)</span>
+            <span class="px-2 py-0.5 rounded text-[10px] font-semibold bg-blue-100 text-blue-800">AlphaFold DB</span>
+            <span class="ml-auto text-[10px] text-[#A8A29E]">avg ${avgPlddt != null ? avgPlddt.toFixed(1) : '—'} · ${scores.length} residues</span>
+          </div>
+          <div class="flex gap-3 mb-2 flex-wrap">
+            <span class="flex items-center gap-1 text-[10px]"><span class="w-3 h-3 rounded-sm" style="background:#0053D6"></span>&gt;90 Very high</span>
+            <span class="flex items-center gap-1 text-[10px]"><span class="w-3 h-3 rounded-sm" style="background:#65CBF3"></span>70–90 Confident</span>
+            <span class="flex items-center gap-1 text-[10px]"><span class="w-3 h-3 rounded-sm" style="background:#FFDB13"></span>50–70 Low</span>
+            <span class="flex items-center gap-1 text-[10px]"><span class="w-3 h-3 rounded-sm" style="background:#FF7D45"></span>&lt;50 Very low</span>
+          </div>
+          <div id="${chartId}" class="w-full overflow-x-auto"></div>
+          ${downsampled ? `<p class="text-[9px] text-[#A8A29E] mt-1">Downsampled for display (showing every ${Math.ceil(scores.length/MAX_BARS)} residues)</p>` : ''}
+          <p class="text-[9px] text-[#A8A29E] mt-1">EBI AlphaFold DB confidence scores. pLDDT &lt; 50 = likely disordered region.</p>
+        </div>`;
+      appendAssistantBubble(html, false);
+
+      // Render D3 bar chart
+      setTimeout(() => {
+        const container = document.getElementById(chartId);
+        if (!container || typeof d3 === 'undefined') return;
+        const W = container.clientWidth || 600;
+        const H = 80;
+        const svg = d3.select(container).append('svg')
+          .attr('width', W).attr('height', H)
+          .style('display', 'block');
+        const xScale = d3.scaleLinear().domain([0, displayScores.length]).range([0, W]);
+        const barW = Math.max(1, W / displayScores.length);
+        const colorFn = v => v >= 90 ? '#0053D6' : v >= 70 ? '#65CBF3' : v >= 50 ? '#FFDB13' : '#FF7D45';
+        svg.selectAll('rect').data(displayScores).enter().append('rect')
+          .attr('x', (d, i) => xScale(i))
+          .attr('y', d => H - (d / 100) * H)
+          .attr('width', barW - 0.3)
+          .attr('height', d => (d / 100) * H)
+          .attr('fill', d => colorFn(d));
+        // pLDDT=70 threshold line
+        svg.append('line')
+          .attr('x1', 0).attr('x2', W)
+          .attr('y1', H - 0.7 * H).attr('y2', H - 0.7 * H)
+          .attr('stroke', '#888').attr('stroke-width', 0.8).attr('stroke-dasharray', '3,2');
+      }, 100);
+    } catch (e) {
+      // Silently skip if AlphaFold DB API unavailable
+    }
+  }
+
+  // B4: STRING PPI network static image
+  function showSTRINGNetworkImage(geneName, taxonId) {
+    if (!geneName || !taxonId) return;
+    const imgUrl = `https://string-db.org/api/image/network?identifiers=${encodeURIComponent(geneName)}&species=${taxonId}&limit=10&network_flavor=evidence`;
+    const linkUrl = `https://string-db.org/network/${taxonId}.${encodeURIComponent(geneName)}`;
+    const html = `
+      <div class="card-in bg-[#F5F1EB] border border-[#DDD8D0] rounded-2xl p-5 mt-4">
+        <div class="flex items-center gap-2 mb-3">
+          <span class="text-[#CC785C] font-semibold text-sm">PPI Network Overview</span>
+          <span class="px-2 py-0.5 rounded text-[10px] font-semibold bg-green-100 text-green-800">STRING DB</span>
+          <a href="${escHtml(linkUrl)}" target="_blank" rel="noopener"
+             class="ml-auto text-[10px] text-[#CC785C] underline hover:no-underline">Open in STRING →</a>
+        </div>
+        <p class="text-[10px] text-[#78716c] mb-3">Top 10 interaction partners · evidence-weighted network</p>
+        <div class="bg-white rounded-xl border border-[#E6E1D9] overflow-hidden flex items-center justify-center min-h-[200px]">
+          <img src="${escHtml(imgUrl)}"
+               alt="STRING PPI network for ${escHtml(geneName)}"
+               class="max-w-full"
+               onerror="this.parentElement.innerHTML='<p class=\\'text-xs text-[#A8A29E] p-4\\'>STRING network image unavailable.</p>'"
+               loading="lazy" />
+        </div>
+        <p class="text-[9px] text-[#A8A29E] mt-2">STRING Database v12. Evidence channels: co-expression, experiments, databases, text mining, neighborhood, co-occurrence.</p>
+      </div>`;
+    appendAssistantBubble(html, false);
+  }
+
+  // =========================================================================
+  // Target Discovery Report — showTargetDiscoveryReport()
+  // Displayed when a Research Orientation Query (ROQ) is detected.
+  // =========================================================================
+  function showTargetDiscoveryReport(report) {
+    if (!report) return;
+    const candidates = report.candidates || [];
+    const organism = report.organism_scientific || 'Unknown organism';
+    const orgCommon = report.organism_common || '';
+    const disease = report.disease_name || 'Unknown disease';
+
+    // Score bar helper
+    function scoreBar(score) {
+      const pct = Math.round(score * 100);
+      const color = score >= 0.7 ? '#22c55e' : score >= 0.4 ? '#f59e0b' : '#ef4444';
+      return `<div class="flex items-center gap-1.5">
+        <div class="flex-1 bg-[#E6E1D9] rounded-full h-1.5">
+          <div class="h-1.5 rounded-full" style="width:${pct}%;background:${color}"></div>
+        </div>
+        <span class="text-[10px] font-mono text-[#78716c]">${pct}</span>
+      </div>`;
+    }
+
+    // Context summary (collapsible)
+    const ctxId = 'ctx-' + Math.random().toString(36).slice(2,8);
+    const contextHtml = report.context_summary ? `
+      <div class="mt-3 border border-[#E6E1D9] rounded-xl overflow-hidden">
+        <button onclick="document.getElementById('${ctxId}').classList.toggle('hidden')"
+                class="w-full flex items-center justify-between px-4 py-2.5 text-left bg-[#FDFAF6] hover:bg-[#F5F1EB] transition-colors">
+          <span class="text-xs font-semibold text-[#44403c]">Disease Background</span>
+          <span class="text-[#78716c] text-xs">▾</span>
+        </button>
+        <div id="${ctxId}" class="hidden px-4 py-3 bg-white">
+          <p class="text-xs text-[#57534e] leading-relaxed">${escHtml(report.context_summary)}</p>
+        </div>
+      </div>` : '';
+
+    // Candidate rows
+    const rows = candidates.map(c => {
+      const riskBadge = c.selectivity_risk
+        ? `<span class="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-orange-100 text-orange-700">⚠ Human homolog</span>`
+        : (c.human_identity_pct !== null && c.human_identity_pct !== undefined
+            ? `<span class="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-green-100 text-green-700">✓ Selective (${c.human_identity_pct.toFixed(0)}%)</span>`
+            : `<span class="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-gray-100 text-gray-500">Homolog unknown</span>`);
+      const knownBadge = c.known_target
+        ? `<span class="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-blue-100 text-blue-700">Known target</span>`
+        : '';
+      const inhibitorText = c.known_inhibitor_class
+        ? `<p class="text-[10px] text-[#78716c] mt-0.5">Inhibitor class: <span class="text-[#CC785C]">${escHtml(c.known_inhibitor_class)}</span></p>`
+        : '';
+      const rowBg = c.selectivity_risk ? 'bg-orange-50/50' : (c.known_target ? 'bg-blue-50/30' : '');
+      return `
+        <tr class="border-b border-[#F0EBE5] ${rowBg} hover:bg-[#FAF6F2] transition-colors">
+          <td class="px-3 py-2.5 text-center">
+            <span class="text-xs font-bold text-[#78716c]">${c.rank}</span>
+          </td>
+          <td class="px-3 py-2.5">
+            <div class="font-semibold text-sm text-[#1C1917]">${escHtml(c.gene_name || '—')}</div>
+            <div class="text-[10px] text-[#78716c] mt-0.5">${escHtml(c.accession)}</div>
+          </td>
+          <td class="px-3 py-2.5">
+            <div class="text-xs text-[#44403c] max-w-[220px] truncate" title="${escHtml(c.protein_name)}">${escHtml(c.protein_name || '—')}</div>
+          </td>
+          <td class="px-3 py-2.5 min-w-[100px]">${scoreBar(c.target_score)}</td>
+          <td class="px-3 py-2.5">
+            <div class="text-[10px] text-[#57534e]">${escHtml(c.essentiality_note)}</div>
+          </td>
+          <td class="px-3 py-2.5 space-y-0.5">
+            ${riskBadge}${knownBadge ? '<br>' + knownBadge : ''}
+            ${inhibitorText}
+          </td>
+          <td class="px-3 py-2.5">
+            <span class="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-gray-100 text-gray-600">${escHtml(c.modality_hint)}</span>
+          </td>
+          <td class="px-3 py-2.5">
+            <button onclick="submitQuery('${escHtml((c.gene_name||'') + ' ' + organism).replace(/'/g,"\\'")}', null)"
+                    class="px-2.5 py-1 rounded-lg bg-[#CC785C] hover:bg-[#B8674D] text-white text-[10px] font-semibold transition-colors whitespace-nowrap">
+              Analyze →
+            </button>
+          </td>
+        </tr>`;
+    }).join('');
+
+    // Gemini strategy
+    const strategyId = 'strat-' + Math.random().toString(36).slice(2,8);
+    const strategyHtml = report.gemini_strategy ? `
+      <div class="mt-4 border border-[#E6E1D9] rounded-xl overflow-hidden">
+        <button onclick="document.getElementById('${strategyId}').classList.toggle('hidden')"
+                class="w-full flex items-center justify-between px-4 py-2.5 text-left bg-[#FDFAF6] hover:bg-[#F5F1EB] transition-colors">
+          <span class="text-xs font-semibold text-[#44403c]">🤖 Therapeutic Strategy (Gemini)</span>
+          <span class="text-[#78716c] text-xs">▾</span>
+        </button>
+        <div id="${strategyId}" class="px-4 py-3 bg-white">
+          <p class="text-xs text-[#57534e] leading-relaxed">${escHtml(report.gemini_strategy)}</p>
+        </div>
+      </div>` : '';
+
+    const html = `
+      <div class="card-in bg-[#F5F1EB] border border-[#DDD8D0] rounded-2xl shadow-sm overflow-hidden">
+        <!-- Header -->
+        <div class="px-6 py-4 border-b border-[#E6E1D9]">
+          <div class="flex items-start justify-between gap-3">
+            <div>
+              <div class="flex items-center gap-2 flex-wrap">
+                <h2 class="font-semibold text-[#1C1917] text-base">🎯 Target Discovery</h2>
+                <span class="px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-100 text-emerald-800">Research Orientation Query</span>
+              </div>
+              <p class="text-sm text-[#78716c] mt-0.5">
+                <span class="font-medium text-[#44403c]">${escHtml(disease)}</span>
+                <span class="mx-1.5 text-[#C4BAB3]">·</span>
+                <span class="italic">${escHtml(organism)}</span>
+                ${orgCommon ? `<span class="mx-1 text-[#C4BAB3]">·</span><span class="text-[#78716c]">${escHtml(orgCommon)}</span>` : ''}
+              </p>
+            </div>
+            <span class="text-[10px] text-[#A8A29E] mt-1 whitespace-nowrap">${candidates.length} candidates</span>
+          </div>
+          ${contextHtml}
+        </div>
+
+        <!-- Candidate table -->
+        <div class="overflow-x-auto">
+          <table class="w-full text-left">
+            <thead class="bg-[#F0EBE5]">
+              <tr>
+                <th class="px-3 py-2 text-[10px] font-semibold text-[#78716c] uppercase tracking-wide">#</th>
+                <th class="px-3 py-2 text-[10px] font-semibold text-[#78716c] uppercase tracking-wide">Gene</th>
+                <th class="px-3 py-2 text-[10px] font-semibold text-[#78716c] uppercase tracking-wide">Protein</th>
+                <th class="px-3 py-2 text-[10px] font-semibold text-[#78716c] uppercase tracking-wide">Score</th>
+                <th class="px-3 py-2 text-[10px] font-semibold text-[#78716c] uppercase tracking-wide">Essentiality</th>
+                <th class="px-3 py-2 text-[10px] font-semibold text-[#78716c] uppercase tracking-wide">Selectivity</th>
+                <th class="px-3 py-2 text-[10px] font-semibold text-[#78716c] uppercase tracking-wide">Modality</th>
+                <th class="px-3 py-2 text-[10px] font-semibold text-[#78716c] uppercase tracking-wide">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rows || '<tr><td colspan="8" class="px-4 py-6 text-center text-sm text-[#78716c]">No candidates found for this organism.</td></tr>'}
+            </tbody>
+          </table>
+        </div>
+
+        ${strategyHtml}
+
+        <!-- Footer note -->
+        <div class="px-6 py-3 bg-amber-50 border-t border-amber-100">
+          <p class="text-[10px] text-amber-700">⚠ Target scores are computational estimates based on essentiality annotations, GO terms, and human sequence homology. Experimental validation required before therapeutic development. Click <strong>Analyze →</strong> to run a full protein analysis on any candidate.</p>
+        </div>
+      </div>`;
+    _saveMsg({ role: 'assistant', type: 'report', reportType: 'target_discovery', data: report });
+    appendAssistantBubble(html, false);
   }
 
 </script>

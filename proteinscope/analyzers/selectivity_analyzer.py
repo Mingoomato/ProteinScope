@@ -326,7 +326,7 @@ def _extract_paralogs_from_interactions(
             # Handle both object attributes and dict keys
             if hasattr(interaction, "partner_gene"):
                 partner = str(interaction.partner_gene)
-                confidence = float(interaction.confidence_score)
+                confidence = float(interaction.confidence_score or 0.0)
             elif isinstance(interaction, dict):
                 partner = str(
                     interaction.get("partner_gene")

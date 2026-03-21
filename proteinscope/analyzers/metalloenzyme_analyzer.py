@@ -155,7 +155,7 @@ def _parse_uniprot_binding_sites(entry: dict, metal_ions: list[str]) -> list[Met
     # Group residues by ligandDescription (= one site per distinct metal ligand)
     site_map: dict[str, list[str]] = {}
     for feat in entry.get("features", []):
-        if feat.get("featureType") != "Binding site":
+        if feat.get("type") != "Binding site":
             continue
         ligand = feat.get("ligandDescription", feat.get("ligand", {}).get("name", "")) or ""
         ligand_lower = ligand.lower()

@@ -30,12 +30,17 @@ Thumbs.db
 
 # Project data / outputs
 proteinscope/output/
-proteinscope/reports/*.pdf
+proteinscope/reports/
 proteinscope/structures/
 proteinscope/diagrams/
 proteinscope/data/*.db
 proteinscope/data/*.sqlite
 proteinscope/*.db
+cache.db
+
+# Cache and runtime data
+proteinscope/.cache/
+proteinscope/.data/
 
 # Claude memory and session files
 .claude/
