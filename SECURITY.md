@@ -1,21 +1,18 @@
 # Security Policy
 
-## Supported Versions
+## Scope
 
-Use this section to tell people about which versions of your project are
-currently being supported with security updates.
-
-| Version | Supported          |
-| ------- | ------------------ |
-| 5.1.x   | :white_check_mark: |
-| 5.0.x   | :x:                |
-| 4.0.x   | :white_check_mark: |
-| < 4.0   | :x:                |
+ProteinScope is a research and portfolio codebase. The `main` branch is the
+only supported development line; dependencies and external data services may
+change independently of this repository.
 
 ## Reporting a Vulnerability
 
-Use this section to tell people how to report a vulnerability.
+Please report security issues privately through
+[GitHub Security Advisories](https://github.com/Mingoomato/ProteinScope/security/advisories/new)
+instead of opening a public issue. Include the affected component, a minimal
+reproduction, and the impact you observed. Do not include API keys, access
+tokens, or private biological data in the report.
 
-Tell them where to go, how often they can expect to get an update on a
-reported vulnerability, what to expect if the vulnerability is accepted or
-declined, etc.
+The project may not be able to reproduce issues that require a live third-party
+service, but reports will be triaged against the current source and tests.

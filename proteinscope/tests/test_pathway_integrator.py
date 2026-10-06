@@ -78,7 +78,7 @@ class TestBuildMetabolicPathways:
             },
         }
         pathways = build_metabolic_pathways_from_kegg(kegg_data, "CS")
-        assert "genome.jp" in pathways[0].diagram_url
+        assert "www.kegg.jp" in pathways[0].diagram_url
 
 
 # ---------------------------------------------------------------------------

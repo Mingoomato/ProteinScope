@@ -2,26 +2,27 @@
 
 > *"Don't just ask what a protein is. Ask what happens when it changes."*
 
-**ProteinScope** is a full-stack AI-powered protein analysis platform that transforms a single gene symbol or UniProt accession into a comprehensive, multi-layer scientific report — integrating 20+ live biological databases, 46 specialized analysis modules, ESM-2 deep learning, AlphaFold structural analysis, Gemini 2.5 Pro AI synthesis, and an interactive 3D molecular viewer.
+**ProteinScope** is a full-stack protein analysis platform that transforms a gene symbol or UniProt accession into a structured, multi-layer report. It combines public biological data sources, asynchronous retrieval, typed models, analysis modules, optional ML components, Gemini synthesis, and an interactive 3D molecular viewer.
 
-Built by a single developer as a solo engineering project, ProteinScope evolved from a simple protein lookup tool into what the developer calls a **Biological Consequence Engine**: a platform that answers not just *"what is this protein?"* but *"what will happen if I mutate it, drug it, edit it, or engineer it?"*
+ProteinScope is a self-directed portfolio project with substantial AI-assisted implementation. I owned the requirements, architecture, integration work, validation, debugging, and system-level iteration; the repository and tests are the source of truth for what is currently implemented. The project evolved from a protein lookup tool into what I call a **Biological Consequence Engine**: a platform that asks not just *"what is this protein?"* but *"what might happen if I mutate it, drug it, edit it, or engineer it?"*
 
 ---
 
 ## Table of Contents
 
 1. [Why This Exists](#why-this-exists)
-2. [What ProteinScope Does](#what-proteinscope-does)
-3. [The 4-Layer Architecture](#the-4-layer-architecture)
-4. [Complete Feature Inventory](#complete-feature-inventory)
-5. [The 3-AI Brainstorming Session](#the-3-ai-brainstorming-session)
-6. [Technical Architecture](#technical-architecture)
-7. [Database Integrations](#database-integrations)
-8. [Development Journey & Challenges](#development-journey--challenges)
-9. [Getting Started](#getting-started)
-10. [Project Statistics](#project-statistics)
-11. [Research Foundation](#research-foundation)
-12. [Roadmap](#roadmap)
+2. [Engineering Overview](#engineering-overview)
+3. [What ProteinScope Does](#what-proteinscope-does)
+4. [The 4-Layer Architecture](#the-4-layer-architecture)
+5. [Complete Feature Inventory](#complete-feature-inventory)
+6. [The 3-AI Brainstorming Session](#the-3-ai-brainstorming-session)
+7. [Technical Architecture](#technical-architecture)
+8. [Database Integrations](#database-integrations)
+9. [Development Journey & Challenges](#development-journey--challenges)
+10. [Getting Started](#getting-started)
+11. [Project Statistics](#project-statistics)
+12. [Research Foundation](#research-foundation)
+13. [Roadmap](#roadmap)
 
 ---
 
@@ -45,9 +46,37 @@ UniProt → download FASTA
 
 Each step involves a context switch. Each tool has a different interface, a different data format, a different update cadence. By the time you've assembled the picture, a colleague has moved on, the meeting has happened, or the drug target opportunity has been scooped.
 
-**ProteinScope collapses this entire workflow into a single query.**
+**ProteinScope brings this workflow behind a single query interface.**
 
-Type a gene name. Get a structured, cited, AI-synthesized report covering molecular function, structural analysis, evolutionary conservation, drug interactions, clinical variants, PTM logic, protein engineering options, CRISPR/AAV design parameters, covalent inhibitor sites, and a Gemini 2.5 Pro narrative — all in under 30 seconds.
+Type a gene name and receive a progressively assembled report covering the integrations and analyses available for that request. External service availability, model calls, cache state, and the selected analysis path affect latency; there is no fixed end-to-end time guarantee.
+
+---
+
+## Engineering Overview
+
+The current service path is intentionally inspectable:
+
+```
+HTTP / CLI query
+      ↓
+FastAPI or `proteinscope/main.py`
+      ↓
+query engine → async fetchers → analysis modules
+      ↓
+typed ProteinRecord models → optional Gemini synthesis
+      ↓
+SSE progress stream, report exports, or CLI output
+```
+
+The main HTTP entry point is `proteinscope/web/app.py`; orchestration lives in
+`proteinscope/core/query_engine.py`; the structured model layer is in
+`proteinscope/core/models.py`; and regression tests are under
+`proteinscope/tests/`. Tests use mocked HTTP fixtures where external calls are
+needed and are not intended to depend on live research APIs.
+
+The repository contains both the older CLI surface and the newer web surface.
+Optional integrations can be unavailable or rate-limited, so partial results
+and explicit evidence/provenance are part of the design.
 
 ---
 
@@ -63,13 +92,13 @@ User types: "EGFR" or "P00533"
                     │
          ┌──────────┼──────────────┐
          ▼          ▼              ▼
-    UniProt      AlphaFold     20+ DB fetchers
+    UniProt      AlphaFold     async DB fetchers
     (primary)    (structure)   (parallel async)
          │          │              │
          └──────────┴──────────────┘
                     │
                     ▼
-           46 Analysis Modules
+           Analysis Modules
            (sequential + parallel)
                     │
                     ▼
@@ -280,7 +309,7 @@ This is now the standard design process for ProteinScope: major architectural de
 │  FastAPI (async)  ·  Uvicorn ASGI  ·  Server-Sent Events    │
 ├──────────────────────────────────────────────────────────────┤
 │  Python 3.11+                                                │
-│  Pydantic v2 (64-field ProteinRecord + 100+ sub-models)     │
+│  Pydantic v2 structured ProteinRecord and report models     │
 │  asyncio + httpx (parallel DB fetching, graceful degrade)   │
 ├──────────────────────────────────────────────────────────────┤
 │  Google Gemini 2.5 Pro (AI synthesis & narrative)           │
@@ -310,8 +339,8 @@ This is now the standard design process for ProteinScope: major architectural de
 │  Cytoscape.js + CoSE-Bilkent (PPI network graph)            │
 │  D3.js (ESM-2 fitness landscape heatmaps)                   │
 ├──────────────────────────────────────────────────────────────┤
-│  Single-page, zero-framework  ·  ~5,000 line JS/HTML        │
-│  17 specialized report display functions                    │
+│  Single-page, zero-framework browser client                 │
+│  Specialized report display functions                        │
 │  Evidence badge system (experimental/computational/AI)      │
 │  PDF + Markdown export                                      │
 └──────────────────────────────────────────────────────────────┘
@@ -344,7 +373,7 @@ In the UI, every data point renders a colored evidence badge:
 
 ### The Analyzer Pattern
 
-All 46 analysis modules follow a strict interface contract:
+Analysis modules are intended to follow a strict interface contract:
 
 ```python
 async def run_X_analysis(
@@ -367,7 +396,7 @@ This pattern ensures that adding a new analysis module never risks breaking exis
 
 ## Database Integrations
 
-ProteinScope queries **20+ biological databases** in parallel on every protein lookup:
+ProteinScope can query multiple biological databases in parallel for a protein lookup:
 
 | Database | Data Retrieved | Notes |
 |----------|---------------|-------|
@@ -411,9 +440,9 @@ Every feature added raised three new scientific questions. Adding drug interacti
 
 **Solution**: The **Analyzer Pattern** — a strict interface (`async def run_X(..., step_cb=None) -> XReport | None`, never raises, always returns, Gemini synthesis as the final step). This meant each new capability slotted in without touching existing code. Adding a new analyzer requires touching exactly four files: the analyzer file itself, `models.py`, `query_engine.py`, and `index.html`. Nothing else needs to change.
 
-### Challenge 2: 20 APIs, 20 Failure Modes
+### Challenge 2: Many APIs, Many Failure Modes
 
-Running 20+ async database queries simultaneously against public research APIs is operationally complex. Each API has:
+Running asynchronous queries against public research APIs is operationally complex. Each API has:
 - Different rate limits (some per-IP, some per-key, some undocumented)
 - Different response schemas (JSON, XML, TSV, binary formats)
 - Different error conventions (many APIs return HTTP 200 with an error body)
@@ -445,7 +474,7 @@ This discipline forced a rigorous examination of every number in the codebase. S
 
 ### Challenge 4: Pydantic v2 Forward References at Scale
 
-The ProteinRecord model grew from a handful of fields to **64 fields** spanning seven nested model types across multiple files. Pydantic v2's forward-reference resolution requires all referenced types to be registered before `model_rebuild()` is called.
+The ProteinRecord model grew from a handful of fields into a set of nested model types across multiple files. Pydantic v2's forward-reference resolution requires all referenced types to be registered before `model_rebuild()` is called.
 
 **Solution**: A specific pattern for adding new models — try/except import blocks that allow graceful degradation when analyzer modules are incomplete:
 
@@ -465,13 +494,13 @@ Breaking this pattern (e.g., placing imports after `model_rebuild()`) caused sil
 
 ### Challenge 5: Real-Time Streaming Architecture
 
-Researchers expect to see progress. A 30-second analysis with no feedback feels like a crash. Designing a streaming progress architecture that was informative but not overwhelming required significant iteration.
+Researchers expect to see progress. A long-running analysis with no feedback feels like a crash. Designing a streaming progress architecture that was informative but not overwhelming required significant iteration.
 
 **Solution**: A `step_cb` callback pattern. Every analysis function accepts an optional async callback. The analysis modules report meaningful steps ("downloading structure", "detecting h-bonds", "gemini synthesis") and the infrastructure above decides whether to actually stream them. This kept the analysis modules completely independent of the transport layer — the same module can run in a web server (SSE), a CLI (print), or a batch job (logging) with no code changes.
 
 ### Challenge 6: AI-Assisted Development at Scale
 
-The development process itself used AI assistance (Claude) to accelerate implementation of the 46 analysis modules. During the session that implemented Layers 1–3, agent sub-processes for groups A3, A4, and A5 hit concurrent rate limits and returned failure messages instead of code.
+The development process used AI assistance to accelerate implementation and review of analysis modules. During the session that implemented Layers 1–3, agent sub-processes for groups A3, A4, and A5 hit concurrent rate limits and returned failure messages instead of code.
 
 Rather than treating this as a blocker, the session documented which agents completed and which failed, preserved the execution state to a persistent memory system, and the primary session implemented the remaining modules directly. **The development toolchain was itself subject to the same reliability engineering principles as the platform being built.**
 
@@ -506,8 +535,8 @@ The quantum tunneling flag is a small example of this distinction. It doesn't ca
 ### Quick Start (Docker — recommended)
 
 ```bash
-git clone https://github.com/your-username/protein-finder-project
-cd protein-finder-project
+git clone https://github.com/Mingoomato/ProteinScope.git
+cd ProteinScope
 
 # Copy environment template
 cp proteinscope/.env.example proteinscope/.env
@@ -525,7 +554,7 @@ docker-compose -f docker-compose.gpu.yml up
 ### Local Development
 
 ```bash
-cd proteinscope
+cd ProteinScope/proteinscope
 python -m venv venv
 source venv/bin/activate  # Windows: venv\Scripts\activate
 pip install -r requirements.txt
@@ -559,21 +588,19 @@ BTK           → B-cell kinase: ibrutinib context, warhead chemistry, selectivi
 
 ## Project Statistics
 
-| Metric | Value |
-|--------|-------|
-| **Lines of Python (analyzers + core)** | ~21,000 |
-| **Lines of JavaScript / HTML** | ~5,000 |
-| **Analysis Modules** | 46 |
-| **Async Database Fetchers** | 28 |
-| **ProteinRecord Fields** | 64 |
-| **External Databases Integrated** | 20+ |
-| **Peer-reviewed citations in code** | 80+ |
-| **Supported query modes** | 8 |
-| **Report sections per query** | 35+ |
-| **AI models integrated** | 3 (Gemini 2.5 Pro, ESM-2 650M, ESM-IF1) |
-| **AI systems in architecture session** | 3 (Gemini 3, Codex GPT-5.4, Claude 4.6) |
-| **Docker images** | 2 (CPU + CUDA GPU) |
-| **Development model** | Solo, continuous iteration |
+The implementation is actively evolving, so hard-coded line, module, and
+integration counts are intentionally not presented as product guarantees. Use
+the source tree and tests for the current inventory. The main architectural
+surfaces are:
+
+| Surface | Current implementation |
+|---------|------------------------|
+| **Backend** | Python, FastAPI, Uvicorn, async retrieval, SSE |
+| **Structured data** | Pydantic models with provenance and evidence metadata |
+| **AI/ML components** | Gemini synthesis, ESM-based scoring/design, semantic search where configured |
+| **Interfaces** | CLI, HTTP/SSE web service, Markdown/JSON/PDF report paths |
+| **Verification** | pytest fixtures and mocked HTTP integrations; live services are not required for the unit suite |
+| **Development model** | Self-directed, AI-assisted iterative development |
 
 ---
 
@@ -655,14 +682,14 @@ These features require architectural decisions about computational infrastructur
                     └──────────────┬──────────────────┘
                      ┌─────────────┼─────────────┐
        ┌─────────────▼──┐  ┌───────▼──────┐  ┌──▼──────────────┐
-       │  28 Fetchers   │  │ 46 Analyzers │  │  Gemini 2.5 Pro │
-       │  (async, 7d    │  │  (4 layers,  │  │  (synthesis +   │
-       │   SQLite cache)│  │   step_cb)   │  │   narrative)    │
+       │ Async fetchers │  │  Analyzers   │  │  Gemini 2.5 Pro │
+       │  (cache-aware) │  │  (layered,   │  │  (synthesis +   │
+       │                │  │   step_cb)   │  │   narrative)    │
        └────────────────┘  └──────────────┘  └─────────────────┘
                                    │
                     ┌──────────────▼──────────────────┐
                     │       ProteinRecord              │
-                    │   core/models.py · 64 fields    │
+                    │   core/models.py · typed models │
                     │   Pydantic v2 · EvidenceGrade   │
                     └─────────────────────────────────┘
 ```
@@ -671,7 +698,7 @@ These features require architectural decisions about computational infrastructur
 
 ## License
 
-This project is a solo research and engineering portfolio work. Academic and research use is welcomed with attribution.
+This project is a self-directed research and engineering portfolio work. Academic and research use is welcomed with attribution.
 
 ---
 
